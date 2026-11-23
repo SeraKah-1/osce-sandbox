@@ -1,6 +1,11 @@
-# Deploy OSCE Sandbox Studio v0.2
+# Deploy OSCE Playground v0.3
 
-This repository contains one complete Node.js 22 server that serves (1) tablet-first PWA, (2) MCP Streamable HTTP endpoint, (3) MCP Apps interactive 3D HTML resource, and (4) JSON persistence. It does **not** include a public URL or authorization to deploy to your hosting account.
+This repository contains one complete Node.js 22 server that serves (1) tablet-first PWA, (2) MCP Streamable HTTP endpoint, (3) MCP Apps interactive 3D HTML resource, and (4) JSON persistence.
+
+## ChatGPT Sites
+
+Build with `npm run build:sites`. The private Site uses ChatGPT sign-in, the existing `STUDIO` R2 binding, and the same per-account storage key for the web editor and MCP. Publish with the existing `.openai/hosting.json` project ID. Saved v0.2 projects can be read in place. The Node deployment instructions below use file storage and bearer tokens instead.
+
 
 ## Option A: Render Blueprint — HTTPS & persistent volume
 

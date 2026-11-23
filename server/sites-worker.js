@@ -1,9 +1,9 @@
 import {SceneError, Studio} from './studio.js';
-import {rpc} from './mcp-protocol.js';
+import {rpc, toolsList} from './mcp-protocol.js';
 import {renderWidget} from './widget-template.js';
 import assets from './assets.js';
 
-const widget = renderWidget(assets['widget.css'], assets['render3d.js'], assets['widget-ui.js']);
+const widget = renderWidget(assets['index.html'], assets['styles.css'], assets['render3d.js'], assets['app.js']);
 const mime = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
@@ -85,6 +85,8 @@ async function control(request,bucket,identity) {
 }
 
 async function studioApi(request,pathname,bucket,identity) {
+  if (!identity) throw missingIdentity();
+  if (request.method==='GET' && pathname==='/api/connection') return json({toolCount:toolsList.length,version:'0.3.0'});
   const project=await openProject(bucket,identity);
   const {studio}=project;
   const method=request.method;
@@ -96,6 +98,7 @@ async function studioApi(request,pathname,bucket,identity) {
   const payload=await bodyJson(request);
   let result,status=200;
   switch (route) {
+    case 'POST /api/preview': return json(studio.preview(payload.operations,payload.baseRevision));
     case 'POST /api/operations': result=studio.apply(payload.operations,payload.baseRevision); break;
     case 'POST /api/assets': result=studio.createAsset(payload);status=201;break;
     case 'POST /api/behaviors': result=studio.createBehavior(payload);status=201;break;
@@ -129,7 +132,7 @@ export default {
     const pathname=url.pathname;
     const identity=request.headers.get('oai-authenticated-user-id');
     try {
-      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.2.0'},env.STUDIO?200:503);
+      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.3.0'},env.STUDIO?200:503);
       if (pathname==='/mcp' || pathname.startsWith('/api/')) {
         const origin=request.headers.get('Origin');
         if (origin && origin!==url.origin) throw new SceneError('Origin tidak diizinkan.','FORBIDDEN',403);
@@ -139,7 +142,11 @@ export default {
       const file=pathname==='/' ? 'index.html' : pathname.slice(1);
       if (!Object.hasOwn(assets,file) || file.startsWith('widget')) return json({error:'Halaman tidak ditemukan'},404);
       const contentType=mime[file.split('.').at(-1)] || 'application/octet-stream';
-      const content=file==='index.html' && !identity ? signInPage : assets[file];
+      let content=assets[file];
+      if (file==='index.html') {
+        const scope=identity ? new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity))) : null;
+        content=scope ? content.replace('__STUDIO_DRAFT_SCOPE__',Array.from(scope,b=>b.toString(16).padStart(2,'0')).join('')) : signInPage;
+      }
       return new Response(request.method==='HEAD' ? null : content,{headers:{...safeHeaders,'Content-Type':contentType,'Content-Security-Policy':siteCsp}});
     } catch (error) {
       const problem=error instanceof SceneError ? error : new SceneError('Permintaan studio gagal.','INTERNAL_ERROR',500);

@@ -1,4 +1,4 @@
-# Arsitektur Teknis — OSCE Sandbox Studio
+# Arsitektur Teknis — OSCE Playground
 
 ## Konsep
 
@@ -20,9 +20,9 @@ flowchart TD
 
 ## Pembagian komponen
 
-**web/render3d.js** mengelola WebGL shader, box/sphere/cylinder geometry, hierarchical joint matrices, orbit/pan/zoom, proyeksi titik kontrol dan input pointer. Tidak boleh membuat keputusan medis. Tidak mengirim request per frame. Perubahan dikirim setelah gesture selesai.
+**web/render3d.js** mengelola WebGL shader, box/sphere/cylinder geometry, hierarchical joint matrices, orbit/pan/zoom, proyeksi titik kontrol dan input pointer. Tidak boleh membuat keputusan medis. Tidak mengirim request per frame. Perubahan dikirim setelah gesture selesai. Jika pointercancel atau sentuhan kedua muncul, edit sementara dibatalkan sebelum mengaktifkan kamera multitouch.
 
-**web/app.js** mengelola state UI, seleksi, inspector, form builder, komunikasi HTTP dan sinkronisasi. Event dari server dibaca via SSE; ketika token disimpan, fallback polling terjadwal 3 detik. Panjang re-render DOM belum dioptimasi untuk proyek raksasa; batasi dulu jumlah entity.
+**web/app.js** mengelola Add / Ask GPT / Practice, panel seleksi kontekstual, builder lanjutan, komunikasi HTTP/MCP App, draft lokal dan sinkronisasi. Antarmuka saat ini memakai polling terjadwal sekitar 5 detik ketika terlihat, plus reload setelah setiap mutasi; endpoint SSE tersedia tetapi belum dipakai oleh client v0.3. Panjang re-render DOM belum dioptimasi untuk proyek raksasa; batasi dulu jumlah entity.
 
 **server/core.js** memegang scene authoritative, asset definitions, behavior definitions, validasi operasi, commit atomik dan riwayat undo/redo. Satu transaksi dapat mencakup 1–50 operasi. Jika ada operasi tidak valid, seluruh perubahan scene dalam transaksi di-rollback.
 
@@ -58,7 +58,7 @@ Versi lanjutan dapat menambahkan tube/strap/lathe mesh, impor GLB, LOD, componen
 
 Finite-state machine terdiri dari states dan transitions. Pengguna/model memanggil `trigger_action`. Transisi sah hanya terjadi jika ada `from` yang cocok dengan status saat itu. Tidak ada `eval`, `new Function`, script arbitrary, while-loop, atau event chain otomatis. Tidak dapat memicu loop tak hingga dengan sendirinya. Ini bukan engine perhitungan fisiologi.
 
-Contoh untuk manset: `free --wrap--> wrapped --inflate--> inflated --deflate--> wrapped --remove--> free`. Aksi hanya mengubah status logis dan label tampilan; belum ada tekanan fisik atau penghitungan tekanan darah.
+Contoh untuk manset: `free --wrap--> wrapped --inflate--> inflated --deflate--> wrapped --remove--> free`. Aksi dapat mengubah status, visualisasi warna/skala, dan efek attach/detach/move; belum ada tekanan fisik atau penghitungan tekanan darah.
 
 ## Sinkronisasi
 

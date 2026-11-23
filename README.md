@@ -1,55 +1,48 @@
-# OSCE Sandbox Studio v0.2 — deploy-ready code + MCP Apps 3D
+# OSCE Playground v0.3 — tablet-first 3D studio + MCP App
 
-**Tablet-first OSCE practice sandbox, with a browser website and a functional MCP Apps 3D widget intended for ChatGPT.** Doctors and patients are draggable articulated 3D characters; instruments can be positioned, attached and operated with validated state machines. ChatGPT can configure the same scene through MCP, create procedural instrument blueprints and give them safe, executable interaction rules.
+Aplikasi sandbox OSCE berbasis web yang memakai dua boneka bersendi, kamera yang dapat diputar, instrumen interaktif, katalog aset, editor skenario, penyimpanan, serta endpoint MCP untuk ChatGPT. **UI v0.3 menggunakan gaya stickman pastel mint–peach** dan hanya tiga akses utama: **Add**, **Ask GPT**, **Practice**. Kontrol objek muncul sesuai konteks seleksi, sementara fitur teknis berada di menu More.
 
-> **What this ZIP means:** deployable and tested source code, NOT a live website, not a connected ChatGPT plugin, not a physiologically validated OSCE simulator. See [STATUS.md](docs/STATUS.md).
+Varian ChatGPT Sites dibangun dengan `npm run build:sites`. Editor memerlukan akun ChatGPT dan menyimpan data per akun. Situs web, antarmuka MCP App dan data scene memakai backend yang sama. `open_studio` menyediakan HTML MCP App untuk host yang kompatibel. Situs mandiri tidak berpura-pura memiliki AI internal: tombol Ask GPT membuat instruksi yang bisa dikirim dari ChatGPT; pada widget ChatGPT yang tersambung, pesan dikirim melalui host MCP.
 
-## Start immediately
+## Jalankan
 
-Requires Node.js **22+**. No `npm install` required.
+Butuh Node.js 22+. Tidak memerlukan `npm install` atau CDN untuk rendering.
 
 ```bash
-npm test
 npm run check
+npm test
 npm start
+# Tab lain, ketika server aktif:
+npm run smoke
 ```
 
-Open the **tablet website** at http://127.0.0.1:4173. Preview the **in-ChatGPT widget** locally at http://127.0.0.1:4173/widget. Run `npm run smoke` to test MCP resources, tools, UI, state sharing and health. For a real public deployment use [DEPLOY.md](docs/DEPLOY.md).
+Buka `http://127.0.0.1:4173` di browser. Preview antarmuka MCP App di `/widget`. Buka menu **... → Sinkronisasi & MCP → Uji MCP sekarang** untuk mengonfirmasi endpoint lokal. File project default disimpan di `data/studio.json` dan ikut dimuat lagi setelah server restart. Lihat [panduan deploy](docs/DEPLOY.md).
 
-## Features that work
+## Apa yang nyata, bukan mock
 
-- 3D WebGL scene with Canvas fallback, tablet gestures, 2 jointed human characters, editable pose and object transforms.
-- Catalog of 10 built-in tools/furniture objects, scenario templates, manually marked OSCE checklist and persisted state.
-- Builder: create reusable custom instruments from box/sphere/cylinder 3D parts and anchors; add interaction logic with explicit state machine actions and visual/effect changes.
-- Attach to doctor/patient hand and body anchor, detach, move/rotate, save/export/import, undo/redo.
-- **17 MCP tools**, including `open_studio` that displays a real MCP Apps UI widget inside ChatGPT when a compatible host connects. Tools can create assets/behaviors, apply scene operations and test their logic.
-- Atomic revisions prevent competing ChatGPT/tablet edits from silently overwriting changes. An instrument's status, position and visibility properties are saved server-side.
-- Token-protected API/MCP for one trusted owner, container packaging, persistent volume, Caddy/Render HTTPS blueprints, self-check scripts and engine tests.
+- **Renderer 3D WebGL**: camera orbit, pinch zoom, pan, boneka dan alat diproyeksikan dari koordinat X/Y/Z, animasi pose dari hierarki sendi; fallback Canvas2D proyeksi 3D aktif jika GPU/WebGL tidak tersedia. Bug render loop saat data terlambat sudah diperbaiki.
+- **Manipulasi**: pilih sendi, slider sudut, drag sendi, preset duduk/berdiri, geser instrumen, attach/detach ke anchor tervalidasi, rotasi objek, duplicate, delete, camera reset, undo/redo.
+- **Add**: dua tipe puppet dan katalog 10 aset awal. Alat baru yang dibuat muncul dalam katalog tanpa edit kode aplikasi.
+- **Asset Factory & Behavior Engine**: membuat geometri baru dari box/sphere/cylinder, titik anchor, state/transisi, warna/skala per status, efek attach/detach/move; divalidasi tanpa menjalankan JavaScript bebas.
+- **Practice**: tiga kasus bawaan; perubahan template dan checklist disimpan di server, bukan simulasi skor klinis.
+- **Sync & recovery**: operasi revisi atomik, validasi konflik, penyimpanan file temp+rename, undo/redo dengan rollback pada error disk, draft lokal khusus pose/posisi jika koneksi putus, restore JSON untuk situs mandiri, ekspor proyek, status Saving/Saved/Offline/Error.
+- **18 tools MCP** (termasuk `open_studio` dan `preview_scene_operations` yang membuat pratinjau transaksi tanpa menyimpannya); satu `ui://osce-playground/studio.html` resource interaktif.
+- **Deploy**: Dockerfile, Compose, Caddy HTTPS, Render Blueprint dengan persistent disk, health endpoint dan script smoke.
 
-## ChatGPT and hosting
+## Arsitektur
 
-- **MCP endpoint:** `POST https://YOUR_DOMAIN/mcp` (after hosting)
-- **ChatGPT widget resource:** `ui://osce-sandbox-studio/interactive.html`, `text/html;profile=mcp-app`
-- **Open tool:** `open_studio`
-- **Tablet website:** `https://YOUR_DOMAIN/`
+- `web/index.html`, `web/styles.css`, `web/app.js`: website tablet dengan panel kontekstual, keyboard dan sentuhan. `web/sw.js` menyimpan **app shell** saja, **bukan** data pasien atau hasil API.
+- `web/render3d.js`: renderer, model puppet, kamera, gesture dan fallback saat GPU hilang.
+- `server/core.js`: sumber kebenaran scene, validasi, asset/behavior registry, transaksi, penyimpanan, undo/redo, preview.
+- `server/index.js`: HTTP API, auth bearer single-owner, MCP, resource widget.
+- `server/mcp.js`: 18 tools, MCP JSON-RPC endpoint.
+- `server/widget.js`: menghasilkan UI ChatGPT dari **file UI website yang sama**, bukan duplikasi yang bisa tertinggal.
+- `tests/`: 25 pengujian Node, ditambah laporan browser QA pada [docs/QA-V03.md](docs/QA-V03.md).
 
-Read [CHATGPT_SETUP.md](docs/CHATGPT_SETUP.md) for exact plugin setup and ChatGPT Sites path. A URL on your own domain is **not** automatically a ChatGPT Site; Sites must be created/deployed in the account's Work/Sites interface. A ChatGPT plugin cannot connect to `localhost` from OpenAI's servers.
+## Konektivitas ChatGPT
 
-## Security and realism boundaries
+`POST https://DOMAIN/mcp` setelah HTTPS deployment; UI resource `ui://osce-playground/studio.html`, MIME `text/html;profile=mcp-app`. Di ChatGPT Sites, publikasi memperbarui katalog plugin pada Site yang sama. Lihat [docs/CHATGPT_SETUP.md](docs/CHATGPT_SETUP.md).
 
-No arbitrary AI-generated JavaScript execution; tool creation uses validated geometry and behavior primitives only. Only one owner/token supported. Not for protected patient records. OSCE cases and instrument effects are visual/procedural examples, not validated physiology or technical skill grading. See [BEHAVIOR_FACTORY.md](docs/BEHAVIOR_FACTORY.md) and [STATUS.md](docs/STATUS.md).
+## Pembatasan yang disengaja
 
-## Code layout
-
-```text
-server/core.js            Data model, persistence, safe asset/behavior engine
-server/index.js           HTTPS-ready HTTP endpoint behind proxy
-server/mcp.js             MCP tools, JSON-RPC tools/resources
-server/widget.js          Packages 3D widget as a self-contained MCP UI resource
-web/                      Tablet site + WebGL/Canvas renderer + widget assets
-scripts/smoke-test.mjs    Deployment/MCP health smoke test
-tests/                     Unit and HTTP/protocol tests
-render.yaml                Render Blueprint (paid disk-backed)
-compose.production.yaml   VPS Caddy HTTPS reverse proxy + persistent volume
-docs/                     Deployment, ChatGPT, schema, status
-```
+Bentuk instrumen dihasilkan dari primitive yang saat ini didukung, bukan generasi bebas mesh GLB. State alat adalah animasi/status prosedural, bukan model tekanan darah, refleks saraf atau fisiologi manusia. Rig tanpa physics/IK/finger details. Tidak ada skor teknik otomatis. Tidak cocok untuk menyimpan rekam medis, asesmen OSCE formal, layanan publik multi-user atau pembuktian prosedur medis aman. Pengujian GPU di iPad/Android fisik dan publikasi ChatGPT Site belum dilakukan dalam build lokal ini; lihat [STATUS](docs/STATUS.md).

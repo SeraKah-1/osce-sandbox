@@ -1,5 +1,6 @@
 // Test a locally or publicly deployed studio. Example:
 //   STUDIO_URL=https://osce.example.com API_TOKEN=... npm run smoke
+import {WIDGET_URI} from '../server/widget.js';
 const base=(process.env.STUDIO_URL||'http://127.0.0.1:4173').replace(/\/$/,'');
 const token=process.env.API_TOKEN||'';
 const headers={'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})};
@@ -12,8 +13,9 @@ async function run(){
   const init=await post('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'studio-smoke',version:'1.0'}});
   const tools=(await post('tools/list')).tools;
   const resources=(await post('resources/list')).resources;
-  const ui=(await post('resources/read',{uri:'ui://osce-sandbox-studio/interactive.html'})).contents[0];
+  const ui=(await post('resources/read',{uri:WIDGET_URI})).contents[0];
   const open=(await post('tools/call',{name:'open_studio',arguments:{}})).structuredContent;
+  if(!tools.some(x=>x.name==='preview_scene_operations'))throw Error('preview tool missing');
   if(!tools.some(x=>x.name==='open_studio'))throw Error('open_studio tool missing');
   if(!resources.some(x=>x.mimeType==='text/html;profile=mcp-app'))throw Error('MCP App resource missing');
   if(!ui.text.includes('canvas id="scene3d"'))throw Error('Embedded UI missing 3D editor');

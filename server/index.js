@@ -47,6 +47,7 @@ const server=http.createServer(async(req,res)=>{
         res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});res.write(': connected\n\n');clients.add(res);req.on('close',()=>clients.delete(res));return;
       }
       if(req.method==='POST'&&url.pathname==='/api/operations'){const payload=await bodyJson(req);json(res,200,studio.apply(payload.operations,payload.baseRevision));return;}
+      if(req.method==='POST'&&url.pathname==='/api/preview'){const payload=await bodyJson(req);json(res,200,studio.preview(payload.operations,payload.baseRevision));return;}
       if(req.method==='POST'&&url.pathname==='/api/assets'){json(res,201,studio.createAsset(await bodyJson(req)));return;}
       if(req.method==='PATCH'&&url.pathname.startsWith('/api/assets/')){const id=url.pathname.slice('/api/assets/'.length);json(res,200,studio.updateAsset(id,await bodyJson(req)));return;}
       if(req.method==='POST'&&url.pathname==='/api/validate-asset'){json(res,200,studio.validateAssetDraft(await bodyJson(req)));return;}

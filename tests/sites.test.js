@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {Script} from 'node:vm';
 import {execFileSync} from 'node:child_process';
 
 execFileSync(process.execPath,['scripts/build-sites.mjs']);
@@ -36,15 +37,18 @@ const operate=(request,user,title,revision=0)=>request('/api/operations',{
   method:'POST',user,payload:{baseRevision:revision,operations:[{type:'rename_scene',title}]},
 });
 
-test('Sites discovers all 17 tools and provides the real MCP Apps resource',async()=>{
+test('Sites discovers all 18 tools and provides the real MCP Apps resource',async()=>{
   const request=fixture();
   assert.deepEqual((await rpc(request,'server/discover')).result.supportedVersions,['2026-07-28']);
   const tools=(await rpc(request,'tools/list')).result.tools;
-  assert.equal(tools.length,17);
+  assert.equal(tools.length,18);
   const uri=tools.find(tool=>tool.name==='open_studio')._meta.ui.resourceUri;
   const resource=(await rpc(request,'resources/read',{uri})).result.contents[0];
   assert.equal(resource.mimeType,'text/html;profile=mcp-app');
   assert.match(resource.text,/ui\/initialize/);
+  assert.match(resource.text,/OSCE Playground/);
+  assert.match(resource.text,/appInfo:/);
+  assert.doesNotThrow(()=>new Script(resource.text.match(/<script>([\s\S]*?)<\/script>/)[1]));
   assert.match(resource.text,/createRenderer/);
   assert.equal((await rpc(request,'tools/call',{name:'open_studio'})).result.isError,true);
   assert.match(await (await request('/')).text(),/Masuk dengan ChatGPT/);
@@ -77,4 +81,16 @@ test('Sites rejects concurrent writes based on the same revision',async()=>{
     assert.deepEqual(writes.map(reply=>reply.status).sort(),[200,409]);
     assert.equal((await (await request('/api/state',{user:'a'})).json()).scene.revision,revision+1);
   }
+});
+
+test('preview never writes and the older resource URI serves the new editor', async()=>{
+  const request=fixture();
+  assert.equal((await operate(request,'a','Saved project')).status,200);
+  const preview=(await rpc(request,'tools/call',{name:'preview_scene_operations',arguments:{baseRevision:1,operations:[{type:'rename_scene',title:'Unsaved preview'}]}},'a')).result;
+  assert.equal(preview.structuredContent.scene.title,'Unsaved preview');
+  const state=await (await request('/api/state',{user:'a'})).json();
+  assert.equal(state.scene.title,'Saved project');
+  assert.equal(state.scene.revision,1);
+  const legacy=(await rpc(request,'resources/read',{uri:'ui://osce-sandbox-studio/interactive.html'})).result;
+  assert.match(legacy.contents[0].text,/OSCE Playground/);
 });

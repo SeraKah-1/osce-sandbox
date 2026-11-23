@@ -1,101 +1,291 @@
 import {createRenderer} from './render3d.js';
 
-const hosted=Boolean(document.querySelector('meta[name="studio-host"]'));
+// OSCE Playground v0.3. The same UI runs as a standalone site and an MCP App.
+// In an embedded app, mutations go through the host MCP bridge; no simulated AI responses.
 const $=id=>document.getElementById(id);
-const session=(()=>{try{return window.sessionStorage;}catch{return {getItem:()=>null,setItem:()=>{}};}})();
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const safeNum=n=>Number.isFinite(Number(n))?Number(n):0;
-const coords=p=>p.map(n=>Number(n).toFixed(2)).join(', ');
-let data=null,selection=null,selectedJoint=null,selectedAxis='flexion',panel='scene',panelOpen=false,mode='select',busy=false;
-let toastTimer;
-const renderer=createRenderer($('scene3d'),$('hotspots'),{
-  onSelect(id,joint){selection=id;selectedJoint=joint;renderInspector();if(panel==='scene')renderPanel();},
-  onPreviewJoint(){},
-  onCommitJoint(id,joint,axis,angle){mutate([{type:'set_joint',entityId:id,joint,axis,angle}]);},
-  onCommitPosition(id,position){mutate([{type:'move_entity',entityId:id,position}]);}
-});
-function toast(message,error=false){const t=$('toast');t.textContent=message;t.classList.toggle('error',error);t.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('visible'),3200);}
-function headers(){const h={'Content-Type':'application/json'};const token=hosted?null:session.getItem('osce-studio-token');if(token)h.Authorization='Bearer '+token;return h;}
-async function request(path,method='GET',payload){const opts={method,headers:headers()};if(payload!==undefined)opts.body=JSON.stringify(payload);const res=await fetch(path,opts);const body=await res.json().catch(()=>({error:`HTTP ${res.status}`}));if(!res.ok)throw Error(body.error||body.message||`HTTP ${res.status}`);return body;}
-async function refresh(quiet=false){try{const next=await request('/api/state');if(data && next.scene.revision<data.scene.revision)return;if(quiet && data?.scene.revision===next.scene.revision){$('syncStatus').textContent='LIVE SYNC';return;}data=next;renderer.setWorld(data);$('sceneTitle').textContent=data.scene.title;$('entityCount').textContent=`${data.scene.entities.length} objects`;$('revisionText').textContent=`REV ${data.scene.revision}`;$('syncStatus').textContent='LIVE SYNC';if(selection&&!data.scene.entities.some(e=>e.id===selection)){selection=null;selectedJoint=null;}renderer.setSelected(selection,selectedJoint);if(!(quiet&&panel==='builder'&&document.activeElement?.matches('textarea,input')))renderPanel();renderInspector();}catch(e){$('syncStatus').textContent='OFFLINE';if(!quiet)toast(e.message,true);}}
-async function mutate(operations){if(!data)return;const version=data.scene.revision;try{const result=await request('/api/operations','POST',{baseRevision:version,operations});await refresh(true);return result;}catch(e){if(e.message.includes('Revisi konflik'))await refresh(true);toast(e.message,true);throw e;}}
-async function action(path,payload,method='POST',success='Berhasil'){try{const result=await request(path,method,payload);await refresh(true);if(success)toast(success);return result;}catch(e){toast(e.message,true);return null;}}
-function entity(){return data?.scene?.entities.find(e=>e.id===selection);}
-function assetFor(e){return data?.assets?.find(a=>a.id===e?.assetId);}
-function behaviorFor(e){const a=assetFor(e);return data?.behaviors?.find(b=>b.id===a?.behaviorId);}
-function selectEntity(id){selection=id;selectedJoint=null;renderer.setSelected(id);renderPanel();renderInspector();}
-function iconFor(e){if(e.type==='character')return e.role==='doctor'?'♟':'♙';if(e.assetId==='bed')return '▱';if(e.assetId==='chair')return '▣';if(e.assetId==='stethoscope')return '♧';if(e.assetId==='cuff')return '◖';if(e.assetId==='table')return '▤';return '◈';}
-function scenePanel(){const es=data.scene.entities;return `<div class="sectionlabel">CHARACTERS <span class="tag">${es.filter(e=>e.type==='character').length}</span></div>${es.filter(e=>e.type==='character').map(e=>row(e)).join('')}<div class="sectionlabel">ENVIRONMENT & TOOLS <span class="tag">${es.filter(e=>e.type==='asset').length}</span></div>${es.filter(e=>e.type==='asset').map(e=>row(e)).join('')}<div class="button-row"><button class="panel-btn" data-click="add-doctor">+ Dokter</button><button class="panel-btn" data-click="add-patient">+ Pasien</button></div><div class="sectionlabel">WORLD CONTROLS</div><div class="button-row"><button class="panel-btn" data-click="camera-reset">⌖ Reset view</button><button class="panel-btn" data-click="import-file">⇧ Import</button></div><div class="button-row"><button class="panel-btn danger" data-click="reset-scene">↺ Reset scene</button></div>`;}
-function row(e){const patient=e.role==='patient'?'patient':e.role==='doctor'?'doctor':'';return `<button class="object-row ${selection===e.id?'selected':''}" data-entity="${esc(e.id)}"><span class="object-icon ${patient}">${iconFor(e)}</span><span class="object-copy"><strong>${esc(e.name)}</strong><small>${e.type==='character'?(e.role==='doctor'?'Doctor · rig 3D':'Patient · rig 3D'):`${esc(e.assetId)}${e.status?' · '+esc(e.status):''}`}</small></span><span class="row-chevron">›</span></button>`;}
-function assetsPanel(){const groups=[...new Set(data.assets.map(a=>a.category))];return `<div class="info-card"><strong>Asset Library</strong><br>Tap alat untuk menambahkannya ke ruang 3D. Semua alat buatan ChatGPT akan muncul di sini setelah tersinkron.</div>${groups.map(g=>`<div class="sectionlabel">${esc(g.toUpperCase())} <span class="tag">${data.assets.filter(a=>a.category===g).length}</span></div><div class="asset-grid">${data.assets.filter(a=>a.category===g).map(a=>`<button class="asset-card" data-spawn="${esc(a.id)}"><span class="asset-card-icon">${iconFor({assetId:a.id,type:'asset'})}</span><strong>${esc(a.name)}</strong><small>${a.parts.length} parts${a.custom?' · CUSTOM':''}</small></button>`).join('')}</div>`).join('')}<div class="sectionlabel">CUSTOM</div><button class="panel-btn strong" data-click="open-builder" style="width:100%">◈ Buat alat baru</button>`;}
-const blueprintExample={id:'instrument-custom-01',name:'Alat Demonstrasi',category:'Buatan AI',description:'Alat sederhana dari geometri 3D.',parts:[{shape:'cylinder',position:[0,0,0],size:[.06,.35,.06],color:'#2d98ad'},{shape:'sphere',position:[0,.19,0],size:[.10,.10,.10],color:'#eed19e'}],anchors:[{id:'grip',position:[0,-.13,0]}],behaviorId:'demo-switch-01'};
-const behaviorExample={id:'demo-switch-01',name:'On / Off Demonstrasi',states:['off','on'],initial:'off',transitions:[{from:'off',action:'turn_on',to:'on',label:'Nyalakan'},{from:'on',action:'turn_off',to:'off',label:'Matikan'}]};
-function builderPanel(){return `<div class="callout"><strong>AI Builder Engine</strong><br>ChatGPT membuat aset/behavior melalui MCP. Formulir ini juga bisa dipakai manual untuk membuat instrumen tanpa mengubah kode aplikasi. Mesin hanya mengeksekusi bentuk dan state machine yang terdaftar, bukan JavaScript dari AI.</div><div class="sectionlabel">1. BEHAVIOR (OPTIONAL)</div><label class="form-label" for="behaviorJSON">Behavior JSON</label><textarea id="behaviorJSON" spellcheck="false" class="text-area" rows="9">${esc(JSON.stringify(behaviorExample,null,2))}</textarea><div class="button-row"><button class="panel-btn" data-click="test-local-behavior">Validasi JSON</button><button class="panel-btn strong" data-click="create-behavior">+ Simpan behavior</button></div><div class="sectionlabel">2. ASSET BLUEPRINT</div><label class="form-label" for="assetJSON">Geometri + anchor + behaviorId</label><textarea id="assetJSON" spellcheck="false" class="text-area" rows="15">${esc(JSON.stringify(blueprintExample,null,2))}</textarea><div class="button-row"><button class="panel-btn" data-click="validate-asset">Validasi JSON</button><button class="panel-btn strong" data-click="create-asset">+ Buat alat</button></div><p class="mini-note">Urutan: simpan behavior dulu (jika direferensikan), baru simpan alat. ID harus unik. Objek yang dibuat langsung ada di katalog.</p><div class="sectionlabel">3. CHATGPT MCP</div><button class="panel-btn" data-click="copy-prompt">Salin prompt untuk ChatGPT</button>`;}
-function scenarioPanel(){const s=data.scene.scenario;const total=s.steps.length,done=(s.completed||[]).length;return `<div class="info-card"><span class="indicator">SCENARIO PLAYER</span><br><strong style="font-size:16px">${esc(s.name)}</strong><br>${esc(s.category||'Custom')} · ${s.generated?'AI-generated · review needed':'Template simulasi'}<br><span class="mini-note">${esc(s.note)}</span></div><label class="form-label" for="scenarioSelect">Pilih kasus</label><select class="select" id="scenarioSelect">${data.templates.map(t=>`<option value="${esc(t.id)}" ${t.id===s.id?'selected':''}>${esc(t.name)}</option>`).join('')}${s.generated?`<option value="custom" selected>${esc(s.name)}</option>`:''}</select><button class="panel-btn strong" data-click="load-scenario" style="width:100%;margin-top:9px">Muat skenario</button><div class="sectionlabel">PATIENT BRIEF</div><div class="info-card"><strong>${esc(s.patient?.name||'Pasien simulasi')}</strong> · ${esc(s.patient?.age||'–')} tahun<br>${esc(s.patient?.complaint||'Tidak ada keluhan dicantumkan')}</div><div class="sectionlabel">OSCE CHECKLIST <span class="tag">${done}/${total}</span></div>${s.steps.map((step,i)=>`<label class="scenario-step ${(s.completed||[]).includes(i)?'checked':''}"><input type="checkbox" data-step="${i}" ${(s.completed||[]).includes(i)?'checked':''}><span>${esc(step)}</span></label>`).join('')}<p class="mini-note">Checklist ditandai manual. Sistem tidak mendeteksi apakah teknik pemeriksaan benar.</p>`;}
-function connectionPanel(){const endpoint=location.origin+'/mcp';if(hosted)return `<div class="info-card"><strong>Koneksi ChatGPT</strong><p>Scene, alat, dan riwayat proyek disimpan untuk akun yang sedang masuk.</p></div><label class="form-label">Alamat MCP</label><input class="field" readonly value="${esc(endpoint)}"><div class="button-row"><button class="panel-btn" data-click="copy-url">Salin URL</button><button class="panel-btn" data-click="copy-prompt">Salin prompt</button></div>`;return `<div class="info-card"><span class="indicator">MODEL CONTEXT PROTOCOL</span><br><strong>MCP Control Plane</strong><br>ChatGPT dapat membaca world, membuat alat dan behavior, memodifikasi pose, serta menjalankan skenario melalui tool resmi.</div><label class="form-label">MCP endpoint lokal</label><input class="field" readonly value="${esc(endpoint)}"><div class="button-row"><button class="panel-btn" data-click="copy-url">Salin URL</button><button class="panel-btn" data-click="copy-prompt">Salin prompt</button></div><div class="sectionlabel">SERVER AUTHENTICATION</div><label class="form-label" for="serverToken">API_TOKEN (opsional pada localhost)</label><input class="field" type="password" autocomplete="off" id="serverToken" placeholder="Token dari konfigurasi server" value="${esc(session.getItem('osce-studio-token')||'')}"><button class="panel-btn" data-click="set-token" style="width:100%;margin-top:9px">Simpan token untuk sesi ini</button><div class="sectionlabel">PENTING UNTUK CHATGPT</div><div class="callout">Alamat localhost tidak dapat diakses server ChatGPT. Untuk menghubungkan sungguhan, deploy MCP di URL HTTPS publik atau tunnel aman, lalu konfigurasi otorisasi. Server contoh ini untuk pengembangan lokal; jangan ekspos port ke internet tanpa perlindungan.</div><div class="sectionlabel">DEBUG</div><button class="panel-btn" data-click="check-mcp">Uji MCP tools/list</button><div id="mcpTest" class="mini-note"></div>`;}
-function renderPanel(){if(!data)return;$('sidePanel').classList.toggle('closed',!panelOpen);document.querySelectorAll('[data-panel]').forEach(b=>b.classList.toggle('active',b.dataset.panel===panel&&panelOpen));const info={scene:['SCENE EXPLORER','Objek ruangan'],assets:['INSTRUMENT LIBRARY','Alat & furnitur'],builder:['AI ASSET FACTORY','Buat alat & logika'],scenario:['OSCE PLAYER','Latihan klinis'],connection:['MCP CONNECTION','Hubungkan ChatGPT']}[panel];$('panelEyebrow').textContent=info[0];$('panelTitle').textContent=info[1];$('panelBody').innerHTML=({scene:scenePanel,assets:assetsPanel,builder:builderPanel,scenario:scenarioPanel,connection:connectionPanel}[panel])();}
-const jointLabels={rightShoulder:'Bahu kanan',leftShoulder:'Bahu kiri',rightElbow:'Siku kanan',leftElbow:'Siku kiri',rightWrist:'Pergelangan tangan kanan',leftWrist:'Pergelangan tangan kiri',rightHip:'Pinggul kanan',leftHip:'Pinggul kiri',rightKnee:'Lutut kanan',leftKnee:'Lutut kiri',rightAnkle:'Pergelangan kaki kanan',leftAnkle:'Pergelangan kaki kiri',neck:'Leher',spine:'Tulang belakang'};
-function axisLabel(axis){return ({flexion:'Flexion / Extension',abduction:'Abduction / Adduction',rotation:'Rotasi'})[axis]||axis;}
-function positionInputs(e){return `<div class="inspector-grid">${['X','Y','Z'].map((axis,i)=>`<label><span class="micro-label">POS ${axis}</span><input type="number" class="field coord-input" data-coordinate="${i}" step="0.1" min="-30" max="30" value="${Number(e.position[i]).toFixed(2)}"></label>`).join('')}</div><button class="panel-btn" data-click="apply-position" style="width:100%;margin-top:8px">Terapkan posisi XYZ</button>`;}
-function inspectorJoint(e){const available=Object.keys(e.pose);const j=selectedJoint&&e.pose[selectedJoint]?selectedJoint:'rightShoulder';selectedJoint=j;renderer.setSelected(e.id,j);if(!Object.hasOwn(e.pose[j],selectedAxis))selectedAxis=Object.keys(e.pose[j])[0];renderer.setAxis(selectedAxis);const joint=e.pose[j];return `<div class="inspector-grid two"><div><span class="micro-label">SENDI AKTIF</span><select class="mini-select" id="jointSelect">${available.map(k=>`<option value="${k}" ${k===j?'selected':''}>${jointLabels[k]||k}</option>`).join('')}</select></div><div><span class="micro-label">GERAKAN</span><select class="mini-select" id="axisSelect">${Object.keys(joint).map(k=>`<option value="${k}" ${k===selectedAxis?'selected':''}>${axisLabel(k)}</option>`).join('')}</select></div></div><div class="control-inline"><input id="jointSlider" type="range" class="control-slider" min="-180" max="180" step="1" value="${joint[selectedAxis]}"><span id="jointValue" class="control-value">${joint[selectedAxis]}°</span></div><div class="inspect-buttons"><button class="panel-btn" data-click="pose-standing">Berdiri</button><button class="panel-btn" data-click="pose-sitting">Duduk</button><button class="panel-btn" data-click="pose-raised-arm">Angkat lengan</button><button class="panel-btn" data-click="joint-reset">Reset sendi</button></div>${positionInputs(e)}`;}
-function renderInspector(){if(!data)return;const e=entity();$('inspectorType').textContent=e?(e.type==='character'?`${e.role.toUpperCase()} · RIGGED HUMAN`:'3D EQUIPMENT · INTERACTIVE'):'SELECT AN OBJECT';$('inspectorName').textContent=e?e.name:'Pilih boneka atau alat';if(!e){$('inspectorContent').innerHTML='<p class="muted">Tap boneka, sendi, atau instrumen untuk mengedit. Pilih mode Geser untuk memindah objek dengan drag.</p>';return;}
- if(e.type==='character'){$('inspectorContent').innerHTML=inspectorJoint(e);return;}
- const b=behaviorFor(e),actions=b?b.transitions.filter(t=>t.from===(e.status||b.initial)):[];const selected=esc(e.id);
- $('inspectorContent').innerHTML=`<div class="inspector-grid two"><div><span class="micro-label">STATUS</span><strong>${esc(e.status||'Objek pasif')}</strong></div><div><span class="micro-label">LOKASI XYZ</span><span>${coords(e.position)}</span></div></div>${e.attachedTo?`<div class="info-card">Terpasang pada <strong>${esc(e.attachedTo)}</strong> · ${esc(e.anchor||'anchor')}</div>`:''}${actions.length?`<div class="inspect-buttons">${actions.map(t=>`<button class="panel-btn strong" data-act="${esc(t.action)}">${esc(t.label)}</button>`).join('')}</div>`:''}<div class="inspect-buttons"><button class="panel-btn" data-click="attach-doctor">Pegang dokter</button><button class="panel-btn" data-click="attach-patient">Pegang pasien</button><button class="panel-btn" data-click="detach">Lepaskan</button></div><span class="micro-label">ROTASI OBJEK (Y)</span><div class="control-inline"><input class="control-slider" id="rotationSlider" type="range" min="-180" max="180" step="5" value="${Math.round((e.rotation?.[1]||0)*180/Math.PI)}"><span class="control-value" id="rotationValue">${Math.round((e.rotation?.[1]||0)*180/Math.PI)}°</span></div><div class="inspect-buttons"><button class="panel-btn" data-click="duplicate">Duplikasi</button><button class="panel-btn danger" data-click="delete">Hapus</button></div>${positionInputs(e)}`;
-}
-function panelNavigate(next){if(panel===next&&panelOpen){panelOpen=false;}else{panel=next;panelOpen=true;}renderPanel();}
-function setMode(next){mode=next;renderer.setMode(next);document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===next));if(next==='pose'&&entity()?.type==='character'){selectedJoint='rightShoulder';renderInspector();}}
-function prompt(){return `Kamu punya MCP OSCE Sandbox Studio. Pertama panggil get_world_state dan get_asset_catalog. Bangun skenario OSCE memakai apply_scene_operations dengan baseRevision terbaru. Jika alat belum ada, gunakan create_behavior (opsional) lalu create_asset untuk membuat bentuk 3D dari box/sphere/cylinder dengan anchors. Kemudian spawn_asset dan trigger_action untuk menguji. Jangan mengarang keberhasilan; uji logika dengan test_behavior. Sampaikan bila simulasi belum memvalidasi fisiologi medis. Contoh: siapkan pemeriksaan tekanan darah dengan dokter, pasien, bed, cuff, dan posisi lengan.`;}
-async function clipboard(s){try{await navigator.clipboard.writeText(s);toast('Tersalin ke clipboard');}catch{toast('Clipboard tidak tersedia. Gunakan HTTPS / localhost.',true);}}
-function download(name,content){const blob=new Blob([content],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
-async function handleAction(kind){const e=entity();try{
- switch(kind){
- case 'add-doctor':await mutate([{type:'spawn_character',role:'doctor',name:'Dokter Baru',position:[-1.5,0,1]}]);toast('Dokter ditambahkan');break;
- case 'add-patient':await mutate([{type:'spawn_character',role:'patient',name:'Pasien Baru',position:[.1,0,1]}]);toast('Pasien ditambahkan');break;
- case 'camera-reset':renderer.resetCamera();break;
- case 'apply-position':{if(!e)return;const inputs=[...document.querySelectorAll('[data-coordinate]')].sort((a,b)=>Number(a.dataset.coordinate)-Number(b.dataset.coordinate));if(inputs.length!==3)throw Error('Koordinat tidak lengkap');const position=inputs.map(x=>Number(x.value));if(position.some(x=>!Number.isFinite(x)))throw Error('Koordinat tidak valid');await mutate([{type:'move_entity',entityId:e.id,position}]);break;}
- case 'open-builder':panel='builder';panelOpen=true;renderPanel();break;
- case 'pose-standing':case 'pose-sitting':case 'pose-raised-arm':if(e)await mutate([{type:'apply_pose',entityId:e.id,presetId:kind.slice(5)}]);break;
- case 'joint-reset':if(e&&selectedJoint)await mutate([{type:'set_joint',entityId:e.id,joint:selectedJoint,axis:selectedAxis,angle:0}]);break;
- case 'attach-doctor':case 'attach-patient':if(e)await mutate([{type:'attach',entityId:e.id,targetId:kind.slice(7),anchor:'rightHand'}]);break;
- case 'detach':if(e)await mutate([{type:'detach',entityId:e.id}]);break;
- case 'delete':if(e&&confirm(`Hapus ${e.name}?`))await mutate([{type:'delete_entity',entityId:e.id}]);break;
- case 'duplicate':if(e?.type==='asset')await mutate([{type:'spawn_asset',assetId:e.assetId,position:[e.position[0]+.35,e.position[1],e.position[2]+.35]}]);break;
- case 'load-scenario':{const value=$('scenarioSelect')?.value;if(value&&value!=='custom')await mutate([{type:'set_scenario',templateId:value}]);break;}
- case 'create-behavior':{const definition=JSON.parse($('behaviorJSON').value);await action('/api/behaviors',definition,'POST','Behavior dibuat dan siap dipakai');break;}
- case 'create-asset':{const definition=JSON.parse($('assetJSON').value);await action('/api/assets',definition,'POST','Alat baru masuk katalog');break;}
- case 'validate-asset':case 'test-local-behavior':{const isAsset=kind==='validate-asset';const x=JSON.parse($(isAsset?'assetJSON':'behaviorJSON').value);const endpoint=isAsset?'/api/validate-asset':'/api/validate-behavior';const result=await request(endpoint,'POST',x);if(!result.valid)throw Error('Validasi gagal');toast(isAsset?`Valid: ${result.partCount} komponen, siap disimpan`:`Valid: ${result.transitionCount} transisi logika, siap disimpan`);break;}
- case 'set-token':session.setItem('osce-studio-token',$('serverToken').value);await refresh();toast('Token sesi disimpan');break;
- case 'check-mcp':{const resp=await request('/mcp','POST',{jsonrpc:'2.0',id:1,method:'tools/list',params:{}});$('mcpTest').textContent=`MCP aktif: ${resp.result?.tools?.length||0} tools`;break;}
- case 'copy-prompt':await clipboard(prompt());break;
- case 'copy-url':await clipboard(location.origin+'/mcp');break;
- case 'reset-scene':if(confirm('Reset seluruh scene ke kondisi awal? Perubahan dapat dibatalkan via Undo.'))await action('/api/reset',{confirmed:true},'POST','Scene di-reset');break;
- case 'import-file':$('fileInput').click();break;
- }
- }catch(err){toast(err.message,true);}}
-$('panelBody').addEventListener('click',async ev=>{
- const target=ev.target.closest('[data-click],[data-entity],[data-spawn]');if(!target)return;
- if(target.dataset.click){await handleAction(target.dataset.click);return;}
- if(target.dataset.entity){selectEntity(target.dataset.entity);return;}
- if(target.dataset.spawn){try{const a=data.assets.find(a=>a.id===target.dataset.spawn);if(!a)return;const id='item-'+Math.random().toString(36).slice(2,10);await mutate([{type:'spawn_asset',id,assetId:a.id,position:a.category==='Furnitur'?[.65,0,.55]:[.45,.77,.55]}]);selectEntity(id);toast(`${a.name} ditambahkan`);}catch(e){toast(e.message,true);} }
-});
-$('panelBody').addEventListener('change',async ev=>{if(ev.target.matches('[data-step]')){const idx=Number(ev.target.dataset.step);await mutate([{type:ev.target.checked?'complete_step':'uncomplete_step',index:idx}]);}});
-$('inspectorContent').addEventListener('click',async ev=>{const t=ev.target.closest('[data-click],[data-act]');if(!t)return;if(t.dataset.click)await handleAction(t.dataset.click);if(t.dataset.act&&entity())try{await mutate([{type:'trigger_action',entityId:entity().id,action:t.dataset.act}]);}catch{}});
-$('inspectorContent').addEventListener('change',async ev=>{if(ev.target.id==='jointSelect'){selectedJoint=ev.target.value;selectedAxis='flexion';renderInspector();}if(ev.target.id==='axisSelect'){selectedAxis=ev.target.value;renderInspector();}if(ev.target.id==='jointSlider'&&entity()){await mutate([{type:'set_joint',entityId:entity().id,joint:selectedJoint,axis:selectedAxis,angle:Number(ev.target.value)}]);}if(ev.target.id==='rotationSlider'&&entity()){const e=entity();await mutate([{type:'rotate_entity',entityId:e.id,rotation:[0,Number(ev.target.value)*Math.PI/180,0]}]);}});
-$('inspectorContent').addEventListener('input',ev=>{if(ev.target.id==='jointSlider'&&entity()?.pose[selectedJoint]){const value=Number(ev.target.value);entity().pose[selectedJoint][selectedAxis]=value;$('jointValue').textContent=value+'°';}if(ev.target.id==='rotationSlider')$('rotationValue').textContent=ev.target.value+'°';});
-document.querySelectorAll('[data-panel]').forEach(btn=>btn.addEventListener('click',()=>panelNavigate(btn.dataset.panel)));
-document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>setMode(btn.dataset.mode)));
-$('panelClose').addEventListener('click',()=>{panelOpen=false;renderPanel();});$('resetCamera').addEventListener('click',()=>renderer.resetCamera());
-$('focusBtn').addEventListener('click',()=>selection&&renderer.focusEntity(selection));
-$('saveBtn').addEventListener('click',async()=>{try{const result=await request('/api/save','POST',{});if(!result.stored)throw Error('Penyimpanan persisten tidak dikonfigurasi');toast('Scene tersimpan di storage server (revisi '+result.revision+').');}catch(err){toast(err.message,true);}});
-$('exportBtn').addEventListener('click',()=>{if(data)download(`osce-studio-rev${data.scene.revision}.json`,JSON.stringify(data,null,2));});
-$('undoBtn').addEventListener('click',()=>action('/api/undo',{},'POST','Undo berhasil'));
-$('redoBtn').addEventListener('click',()=>action('/api/redo',{},'POST','Redo berhasil'));
-const file=document.createElement('input');file.type='file';file.accept='.json,application/json';file.hidden=true;file.id='fileInput';document.body.append(file);
-file.addEventListener('change',async()=>{const f=file.files[0];if(!f)return;try{const snapshot=JSON.parse(await f.text());if(confirm('Timpa project dengan snapshot ini?'))await action('/api/restore',{snapshot,baseRevision:data.scene.revision},'POST','Project dipulihkan');}catch(e){toast(e.message,true);}file.value='';});
-document.addEventListener('keydown',ev=>{if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='z'){ev.preventDefault();if(ev.shiftKey)$('redoBtn').click();else $('undoBtn').click();}if(ev.key==='Escape'&&panelOpen){panelOpen=false;renderPanel();}});
-let stream;
-function connectLive(){if(hosted||session.getItem('osce-studio-token')){setInterval(()=>{if(!document.hidden)refresh(true);},4000);return;}stream=new EventSource('/api/events');stream.addEventListener('scene_updated',()=>refresh(true));stream.onerror=()=>{$('syncStatus').textContent='RECONNECTING';};}
-refresh().then(()=>connectLive());
+const embedded=Boolean(window.__OSCE_EMBEDDED__);
+const previewHost=location.pathname==='/widget' && window.parent===window;
+const hosted=!embedded && Boolean(document.querySelector('meta[name="studio-host"]'));
+const draftScope=document.querySelector('meta[name="studio-draft-scope"]')?.content;
+const icon=name=>`<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Number(n||0).toFixed(2);
+const session=(()=>{try{return sessionStorage}catch{return {getItem:()=>null,setItem:()=>{}}}})();
+const storage=(()=>{try{return embedded ? sessionStorage : localStorage}catch{return {getItem:()=>null,setItem:()=>{},removeItem:()=>{}}}})();
+const DRAFT_KEY='osce-playground-v03-draft'+(hosted ? ':'+draftScope : '');
+const DEFAULT_COMMAND='Buat ruang latihan OSCE yang sederhana. Atur dokter dan pasien, pose awal, serta alat yang diperlukan. Gunakan OSCE Sandbox Studio MCP: baca get_world_state dan get_asset_catalog terlebih dahulu; validasi aset/perilaku baru dan panggil preview_scene_operations untuk perubahan besar; lalu terapkan perubahan dengan baseRevision yang terbaru. Jelaskan keterbatasan simulasi klinis.';
+let data=null,selected=null,selectedJoint=null,axis='flexion',pane=null,category='all',moveMode=false;
+let pending=[],pendingRevision=null,draft=null,queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false;
+let lastError='',renderer,toastTimer,hostReady=false,hostKind='local',frameReady=false;
+const bridgePending=new Map();let bridgeCounter=0, bridgeOrigin='*';
 
-if('serviceWorker' in navigator && ['localhost','127.0.0.1'].includes(location.hostname))navigator.serviceWorker.register('/sw.js').catch(()=>{});
+function status(phase,label){$('syncStatus').textContent=label;$('statusLed').className='status-led '+(phase==='ok'?'ok':phase==='pending'?'pending':phase==='error'?'error':'');$('syncButton').dataset.state=phase;}
+function notice(text,error=false){const target=$('toast');clearTimeout(toastTimer);target.textContent=text;target.hidden=false;target.classList.toggle('error',error);toastTimer=setTimeout(()=>{target.hidden=true},error?6000:2500);}
+function showError(title,detail){lastError=detail;$('errorTitle').textContent=title;$('errorText').textContent=detail;$('errorBar').hidden=false;}
+function clearError(){$('errorBar').hidden=true;lastError='';}
+function showLoading(message='Memuat scene'){$('loadingOverlay').hidden=false;$('loadingDetail').textContent=message;$('retryLoad').hidden=true;}
+function hideLoading(){$('loadingOverlay').hidden=true;}
+function loadingFailure(err){$('loadingDetail').textContent=err;$('retryLoad').hidden=false;status('error','Offline');}
+function getDraft(){try{const d=JSON.parse(storage.getItem(DRAFT_KEY)||'null');return d?.snapshot?.scene&&Array.isArray(d.operations)?d:null;}catch{return null;}}
+function storeDraft(){try{if(!pending.length){storage.removeItem(DRAFT_KEY);return;}storage.setItem(DRAFT_KEY,JSON.stringify({baseRevision:pendingRevision,operations:pending,snapshot:data,savedAt:new Date().toISOString()}));}catch{showError('Penyimpanan lokal diblokir','Browser tidak mengizinkan penyimpanan draft. Ekspor cadangan sebelum menutup tab.');}}
+function parseHostResponse(raw){const result=raw?.result??raw;if(result?.isError){const text=result.content?.find(x=>x.type==='text')?.text||'Perintah MCP gagal';let value;try{value=JSON.parse(text);}catch{}throw Object.assign(Error(value?.error||value?.message||text),{code:value?.code});}if(result?.structuredContent)return result.structuredContent;if(result?.content?.[0]?.text){try{return JSON.parse(result.content[0].text)}catch{}}return result;}
+function apiHeaders(){const h={'Content-Type':'application/json'};const t=hosted?null:session.getItem('osce-studio-token');if(t)h.Authorization='Bearer '+t;return h;}
+async function api(path,method='GET',payload){const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),12000);try{const res=await fetch(path,{method,headers:apiHeaders(),body:payload===undefined?undefined:JSON.stringify(payload),signal:ctrl.signal});const out=await res.json().catch(()=>({error:`HTTP ${res.status}`}));if(!res.ok)throw Object.assign(Error(out.error||`HTTP ${res.status}`),{code:out.code,status:res.status});return out;}catch(e){if(e.name==='AbortError')throw Object.assign(Error('Server tidak merespons (12 detik). Perubahan mungkin sudah diproses; sinkronkan sebelum mengulang.'),{code:'TIMEOUT'});throw e;}finally{clearTimeout(timer)}}
+function hostRpc(method,params,timeout=7000){return new Promise((resolve,reject)=>{const id=++bridgeCounter;const timer=setTimeout(()=>{bridgePending.delete(id);reject(Error('Host MCP tidak merespons'))},timeout);bridgePending.set(id,{resolve,reject,timer});window.parent.postMessage({jsonrpc:'2.0',id,method,params},bridgeOrigin);});}
+window.addEventListener('message',event=>{
+ if(!embedded||event.source!==window.parent||(bridgeOrigin!=='*'&&event.origin!==bridgeOrigin))return;
+ const message=event.data;if(message?.jsonrpc!=='2.0')return;
+ if(message.method==='ui/notifications/tool-result'&&message.params?.structuredContent?.scene&&renderer&&!pending.length){
+   const next=message.params.structuredContent;
+   if(!data||next.scene.revision>data.scene.revision)applyData(next);
+   return;
+ }
+ if(message.id!==undefined&&['ui/resource-teardown','ping'].includes(message.method)){
+   window.parent.postMessage({jsonrpc:'2.0',id:message.id,result:{}},bridgeOrigin);return;
+ }
+ const call=!message.method&&bridgePending.get(message.id);if(!call)return;
+ clearTimeout(call.timer);bridgePending.delete(message.id);
+ if(message.error)call.reject(Error(message.error.message||'MCP host error'));
+ else{if(event.origin && event.origin!=='null')bridgeOrigin=event.origin;call.resolve(message.result);}
+});
+async function initializeBridge(){
+ if(!embedded || hostReady || previewHost)return;
+ if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}
+ try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.3.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
+ catch(err){if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}if(previewHost){hostKind='local-preview';hostReady=false;return;}throw Error('Koneksi host ChatGPT belum tersedia: '+err.message);}
+}
+async function tool(name,args={}){
+ if(embedded&&!previewHost&&!hostReady)await initializeBridge();
+ if(embedded&&hostReady){let r;if(window.openai?.callTool)r=await window.openai.callTool(name,args);else r=await hostRpc('tools/call',{name,arguments:args});return parseHostResponse(r);}
+ if(embedded&&!previewHost)throw Error('Widget belum terhubung dengan host MCP. Coba buka ulang dari ChatGPT.');
+ switch(name){
+  case 'get_world_state':return api('/api/state');
+  case 'get_asset_catalog':{const d=await api('/api/state');return {assets:d.assets,behaviors:d.behaviors};}
+  case 'apply_scene_operations':return api('/api/operations','POST',args);
+  case 'preview_scene_operations':return api('/api/preview','POST',args);
+  case 'create_asset':return api('/api/assets','POST',args);
+  case 'create_behavior':return api('/api/behaviors','POST',args);
+  case 'validate_asset':return api('/api/validate-asset','POST',args.asset);
+  case 'validate_behavior':return api('/api/validate-behavior','POST',args.behavior);
+  case 'test_behavior':return api('/api/behavior-test','POST',args);
+  case 'save_scene':return api('/api/save','POST',{});
+  case 'undo_scene':return api('/api/undo','POST',{});
+  case 'redo_scene':return api('/api/redo','POST',{});
+  case 'get_execution_log':return api('/api/log');
+  case 'reset_world':return api('/api/reset','POST',args);
+  default:throw Error('Tool tidak didukung: '+name);
+ }
+}
+function applyData(next){if(!renderer)throw Error('Renderer tidak tersedia');if(!next?.scene?.entities||!Array.isArray(next.assets))throw Error('Format scene dari server tidak lengkap');data=next;renderer.setWorld(data);
+ if(selected&&!data.scene.entities.some(e=>e.id===selected)){selected=null;selectedJoint=null;}
+ renderer.setSelected(selected,selectedJoint);$('sceneTitle').textContent=data.scene.title;renderSelection();if(pane)renderPane();if(!pending.length)status('ok',`Tersinkron · r${data.scene.revision}`);}
+function setRendererStatus(kind,message){const indicator=$('rendererPill');if(kind==='ready'){frameReady=true;indicator.hidden=true;if(data)hideLoading();}
+ else if(kind==='recovering'){indicator.hidden=false;indicator.textContent='Memulihkan 3D…';}
+ else if(kind==='fallback'){frameReady=true;indicator.hidden=false;indicator.textContent='Mode gambar sederhana · '+message;if(data)hideLoading();}
+}
+function currentEntity(){return data?.scene.entities.find(e=>e.id===selected);}
+function blueprint(e){return data?.assets.find(a=>a.id===e?.assetId);}
+function behavior(e){return data?.behaviors.find(b=>b.id===blueprint(e)?.behaviorId);}
+function choose(id,joint=null){selected=id;selectedJoint=joint;renderer.setSelected(id,joint);renderSelection();if(pane==='objects')renderPane();}
+function stopPane(){pane=null;$('sheet').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.remove('active'));renderSelection();}
+function openPane(name){if(pane===name){stopPane();return;}pane=name;$('sheet').hidden=false;$('selectionCard').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('active',x.dataset.panel===name));renderPane();}
+function friendlyJoint(name){return name.replace(/^(right|left)/,(_,s)=>s==='right'?'Kanan · ':'Kiri · ').replace('Shoulder','Bahu').replace('Elbow','Siku').replace('Wrist','Pergelangan tangan').replace('Hip','Pinggul').replace('Knee','Lutut').replace('Ankle','Pergelangan kaki').replace('neck','Leher').replace('spine','Punggung');}
+function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||pane){el.hidden=true;return;}el.hidden=false;$('selectionName').textContent=e.name;$('selectionKicker').textContent=e.type==='character'?'BONEKA · '+(e.role==='doctor'?'DOKTER':'PASIEN'):'OBJEK · '+(e.status||'BEBAS');
+ if(e.type==='character'){
+  const j=selectedJoint&&e.pose[selectedJoint]?selectedJoint:'rightShoulder';selectedJoint=j;
+  const props=Object.keys(e.pose[j]||{});if(!props.includes(axis))axis=props[0]||'flexion';renderer.setAxis(axis);
+  const angle=e.pose[j]?.[axis]??0;
+  $('selectionBody').innerHTML=`<label class="label-small" for="jointPicker">Sendi</label><select class="field" id="jointPicker" aria-label="Pilih sendi">${Object.keys(e.pose).map(x=>`<option value="${esc(x)}" ${x===j?'selected':''}>${esc(friendlyJoint(x))}</option>`).join('')}</select><div class="label-small">Arah gerak <span id="jointReadout">${fmt(angle)}°</span></div><div class="pill-list">${props.map(x=>`<button class="chip ${x===axis?'active':''}" type="button" data-axis="${esc(x)}">${esc(x)}</button>`).join('')}</div><input class="range" type="range" id="jointRange" min="-180" max="180" step="1" value="${Number(angle)}" aria-label="Sudut sendi"><div class="row-actions"><button class="soft-button" data-operation="joint-reset">Reset sendi</button><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Sentuh titik sendi biru pada boneka untuk mengedit langsung. Nilai sudut adalah kontrol visual, bukan pengukuran klinis.</p>`;
+ }else{
+  const b=behavior(e),actions=(b?.transitions||[]).filter(t=>t.from===(e.status??b?.initial));
+  $('selectionBody').innerHTML=`<div class="label-small">${esc(blueprint(e)?.category||'Objek')} <span>${esc(e.attachedTo?'Terpasang · '+e.attachedTo:e.status||'Bebas')}</span></div>${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}<div class="row-actions"><button class="soft-button" data-operation="move">${icon('move')} ${moveMode?'Selesai geser':'Geser objek'}</button><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button>${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><label class="label-small" for="rotateRange">Rotasi <span id="rotateReadout">${Math.round(e.rotation[1]*180/Math.PI)}°</span></label><input class="range" type="range" id="rotateRange" min="-180" max="180" step="5" value="${Math.round(e.rotation[1]*180/Math.PI)}"><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
+ }
+}
+const navTitles={add:['ADD TO WORLD','Tambah objek'],ask:['AI BUILDER','Ask ChatGPT'],practice:['PRACTICE','Latihan OSCE'],more:['WORKSPACE','Pengaturan'],objects:['SCENE TREE','Semua objek'],advanced:['ADVANCED','Asset & Behavior'],diagnostics:['CONNECTION','Status & diagnostik']};
+function renderPane(){if(!pane)return;
+ if(!data){
+   $('sheetEyebrow').textContent='KONEKSI';$('sheetTitle').textContent='Hubungkan studio';
+   $('sheetBody').innerHTML=`<p>${hosted?'Data scene belum tersedia. Coba sinkronkan ulang setelah masuk dengan ChatGPT.':'Data scene belum tersedia. Untuk server lokal dengan API_TOKEN, masukkan token yang sah.'}</p>${!embedded&&!hosted?`<label class="field"><span>Token server</span><input id="serverToken" type="password" autocomplete="off" placeholder="Bearer API_TOKEN"></label><button class="primary-button" data-ui="set-token">Hubungkan</button>`:''}<div class="row-actions"><button class="soft-button" data-ui="sync-now">Coba muat ulang</button></div><p class="hint">${esc(lastError||'Server offline atau host ChatGPT belum tersedia.')}</p>`;
+   return;
+ }
+ const [eyebrow,title]=navTitles[pane]||['STUDIO','Panel'];$('sheetEyebrow').textContent=eyebrow;$('sheetTitle').textContent=title;let html='';
+ if(pane==='add'){
+  html=`<p>Ketuk untuk menambahkan ke dunia. Objek langsung tampil dan dapat di-undo.</p><div class="seg-tabs"><button data-cat="all" class="${category==='all'?'active':''}">Semua</button><button data-cat="Furnitur" class="${category==='Furnitur'?'active':''}">Furnitur</button><button data-cat="Alat" class="${category==='Alat'?'active':''}">Alat</button></div>${category==='all'?`<h3>Karakter</h3><div class="asset-grid"><button class="asset-choice" data-spawn-character="doctor"><span class="asset-icon">${icon('hand')}</span><span><strong>Dokter</strong><small>Puppet mint</small></span></button><button class="asset-choice" data-spawn-character="patient"><span class="asset-icon peach">${icon('hand')}</span><span><strong>Pasien</strong><small>Puppet peach</small></span></button></div>`:''}<h3>Objek & instrumen</h3><div class="asset-grid">${data.assets.filter(a=>category==='all'||a.category===category).map(a=>`<button class="asset-choice" data-spawn="${esc(a.id)}"><span class="asset-icon blue">${icon('box')}</span><span><strong>${esc(a.name)}</strong><small>${esc(a.category||'Custom')} · ${a.parts.length} bagian</small></span></button>`).join('')}</div>`;
+ }
+ if(pane==='ask'){
+  html=`<p>${embedded&&!previewHost?'Beritahu ChatGPT apa yang ingin dibuat atau diubah. ChatGPT akan menggunakan tool MCP yang terhubung.':'Untuk situs mandiri, kirim instruksi melalui ChatGPT yang terhubung dengan plugin OSCE. Panel ini tidak berpura-pura menjadi chatbot.'}</p><label class="field"><span>Instruksi</span><textarea id="aiPrompt" rows="5" maxlength="3000" placeholder="Misalnya: buat ruangan pemeriksaan saraf, atur posisi pasien, dan siapkan alat...">${esc(window.__lastPrompt||'')}</textarea></label><div class="row-actions">${embedded&&!previewHost?'<button class="primary-button" data-ui="send-chat">Kirim ke ChatGPT</button>':'<button class="primary-button" data-ui="copy-chat">Salin instruksi</button><button class="soft-button" data-ui="open-chat">Buka ChatGPT</button>'}</div><p class="hint">ChatGPT harus memvalidasi instrumen dan logikanya sebelum menyimpan perubahan. Pembuatan geometri hanya mendukung kemampuan engine yang tersedia.</p>`;
+ }
+ if(pane==='practice'){
+  const s=data.scene.scenario;const total=s.steps.length,done=s.completed?.length||0;
+  html=`<p>Pilih kasus, lalu tandai tahap yang benar-benar sudah lu kerjakan. Sistem tidak memberikan skor teknik otomatis.</p><label class="field"><span>Skenario</span><select id="scenarioPicker">${data.templates.map(t=>`<option value="${esc(t.id)}" ${s.id===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}${s.generated?`<option value="custom" selected>${esc(s.name)} (custom)</option>`:''}</select></label><div class="status-desc">${esc(s.patient?.complaint||'Latihan umum')} · ${done} / ${total} tahap selesai</div><h3>Checklist latihan</h3>${s.steps.map((step,i)=>`<label class="step"><input type="checkbox" data-step="${i}" ${(s.completed||[]).includes(i)?'checked':''}><span>${esc(step)}</span></label>`).join('')}<p class="hint">${esc(s.note||'')}</p>`;
+ }
+ if(pane==='more'){
+  html=`<p>Kontrol penting dan pengaturan lanjutan disimpan di sini agar playground tetap bersih.</p><div class="row-actions"><button class="soft-button" data-ui="redo">${icon('redo')} Redo</button><button class="soft-button" data-ui="reset-camera">${icon('focus')} Reset kamera</button></div><div class="row-actions"><button class="soft-button" data-ui="export">${icon('download')} Ekspor proyek</button>${embedded&&!previewHost?'':'<button class="soft-button" data-ui="import">Impor proyek</button>'}</div><div class="section-divider"></div><div class="object-list"><button class="object-choice" data-open="objects">${icon('list')} <strong>Semua objek</strong>${icon('arrow')}</button><button class="object-choice" data-open="diagnostics">${icon('cloud')} <strong>Sinkronisasi & MCP</strong>${icon('arrow')}</button><button class="object-choice" data-open="advanced">${icon('box')} <strong>Editor data lanjutan</strong>${icon('arrow')}</button></div><div class="section-divider"></div><button class="danger-button" data-ui="reset-world">Reset scene ke awal</button>`;
+ }
+ if(pane==='objects')html=`<p>Pilih objek dari daftar jika sulit disentuh karena tertutup objek lain.</p><div class="object-list">${data.scene.entities.map(e=>`<button class="object-choice ${e.id===selected?'active':''}" data-entity="${esc(e.id)}">${icon(e.type==='character'?'hand':'box')} <strong>${esc(e.name)}</strong><span class="tag">${esc(e.type==='character'?e.role:e.assetId)}</span></button>`).join('')}</div><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
+ if(pane==='diagnostics')html=`<div class="status-desc ${pending.length?'error':''}">${pending.length?`Ada ${pending.length} perubahan lokal yang belum disinkronkan.`:'Scene tersinkron atau sedang memeriksa koneksi.'}</div><h3>MCP / API</h3><div class="code-line" id="diagSummary">${embedded?(hostReady?'Host MCP terhubung ('+esc(hostKind)+')':'Host MCP belum terverifikasi'):'Alamat server: '+esc(location.origin+'/mcp')}</div><div class="row-actions"><button class="primary-button" data-ui="check-mcp">Uji MCP sekarang</button><button class="soft-button" data-ui="sync-now">Sinkronkan</button></div>${!embedded&&!hosted?`<label class="field"><span>Token server (hanya disimpan untuk tab ini)</span><input id="serverToken" type="password" autocomplete="off" value="${esc(session.getItem('osce-studio-token')||'')}" placeholder="Jika server meminta token"></label><button class="soft-button" data-ui="set-token">Simpan token sesi</button>`:''}<h3>Cadangan & pemulihan</h3><div class="row-actions"><button class="soft-button" data-ui="export">Ekspor data lokal</button>${pending.length?'<button class="danger-button" data-ui="discard-draft">Buang draft offline</button>':''}</div><h3>Riwayat</h3><div class="object-list" id="recentLog"><span class="hint">Pilih “Uji MCP sekarang” untuk status, atau lihat riwayat yang tersimpan di server.</span></div><button class="soft-button" data-ui="load-log">Muat riwayat</button><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
+ if(pane==='advanced'){
+  html=`<p>Untuk pengguna yang membutuhkan kendali penuh: definisi alat dan logika bekerja sungguhan setelah divalidasi server. Tidak ada eksekusi JavaScript buatan AI.</p><h3>Asset Factory</h3><label class="field"><span>Definisi aset JSON</span><textarea class="code" id="assetJSON" spellcheck="false">${esc(window.__assetDraft||JSON.stringify({id:'probe-custom',name:'Probe latihan',category:'Alat',parts:[{shape:'cylinder',position:[0,0,0],size:[.06,.32,.06],color:'#648bca'}],anchors:[{id:'grip',position:[0,0,0]}]},null,2))}</textarea></label><div class="row-actions"><button class="soft-button" data-ui="validate-asset">Periksa aset</button><button class="primary-button" data-ui="create-asset">Simpan aset</button></div><h3>Behavior Engine</h3><label class="field"><span>Definisi status & transisi JSON</span><textarea class="code" id="behaviorJSON" spellcheck="false">${esc(window.__behaviorDraft||JSON.stringify({id:'switch-custom',name:'Saklar latihan',states:['off','on'],initial:'off',transitions:[{from:'off',action:'on',to:'on',label:'Aktifkan'},{from:'on',action:'off',to:'off',label:'Matikan'}]},null,2))}</textarea></label><div class="row-actions"><button class="soft-button" data-ui="validate-behavior">Periksa perilaku</button><button class="primary-button" data-ui="create-behavior">Simpan perilaku</button></div><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
+ }
+ $('sheetBody').innerHTML=html;
+}
+function offlineEligible(ops){return ops.length===1&&['set_joint','move_entity','rotate_entity'].includes(ops[0].type);}
+async function updateScene(operations,options={}){
+ if(!data)throw Error('Scene belum dimuat');
+ if(pending.length){if(offlineEligible(operations)){pending.push(...operations);storeDraft();status('error',`Offline · ${pending.length} perubahan`);return {queued:true};}throw Error('Masih ada perubahan offline. Sinkronkan terlebih dahulu sebelum menambah objek.');}
+ const baseRevision=data.scene.revision;inFlight++;status('pending','Menyimpan…');
+ try{const result=await tool('apply_scene_operations',{operations,baseRevision});await reload({force:true});clearError();status('ok',`Tersinkron · r${data.scene.revision}`);return result;}
+ catch(err){
+  if((err.code==='TIMEOUT'||err.name==='TypeError'||/fetch|network|Failed to fetch/i.test(err.message))&&offlineEligible(operations)){
+   pendingRevision=baseRevision;pending.push(...operations);storeDraft();status('error',`Offline · ${pending.length} perubahan`);showError('Belum tersinkron','Perubahan pose tersimpan sebagai draft lokal. Sinkronkan sebelum menutup atau memuat ulang.');return {queued:true};
+  }
+  if(!pending.length)await reload({force:true,quiet:true}).catch(()=>{});
+  status('error','Perlu diperiksa');showError(err.code==='REVISION_CONFLICT'?'Scene berubah di tempat lain':'Perubahan gagal',err.message);throw err;
+ }finally{inFlight--;}
+}
+function mutate(ops,options){const task=queue.then(()=>updateScene(ops,options));queue=task.catch(()=>{});return task;}
+async function reload({quiet=false,force=false}={}){
+ if(refreshLock){if(!force)return;while(refreshLock)await new Promise(resolve=>setTimeout(resolve,25));}
+ if(inFlight>0&&!force)return;
+ refreshLock=true;try{
+  const latest=await tool('get_world_state');
+  if(pending.length){if(latest.scene.revision!==pendingRevision){status('error','Konflik perubahan');showError('Perubahan bersamaan','Scene server sudah berubah sejak draft dibuat. Ekspor draft sebelum memutuskan pemulihan; sistem tidak akan menimpa data orang lain.');return;}
+    const result=await tool('apply_scene_operations',{baseRevision:pendingRevision,operations:pending});if(!result.ok)throw Error(result.error||'Sinkronisasi draft gagal');pending=[];pendingRevision=null;storeDraft();const committed=await tool('get_world_state');applyData(committed);
+  }else if(!quiet||!data||latest.scene.revision!==data.scene.revision)applyData(latest);
+  if(!frameReady){$('loadingDetail').textContent='Menyiapkan 3D…';setTimeout(()=>{if(!frameReady&&data){$('loadingDetail').textContent='GPU sedang menyiapkan tampilan…';}},600);}
+  else hideLoading();if(!quiet)clearError();
+ }catch(err){status('error',pending.length?'Draft belum sinkron':'Offline');if(!quiet){showError('Tidak dapat membaca scene',err.message);if(!data)loadingFailure(err.message);}throw err;}finally{refreshLock=false;}
+}
+async function performTool(name,args={},success){inFlight++;status('pending','Memproses…');try{const result=await tool(name,args);if(name!=='get_execution_log'&&name!=='validate_asset'&&name!=='validate_behavior'&&name!=='test_behavior')await reload({force:true,quiet:true});if(success)notice(success);if(!pending.length)status('ok',`Tersinkron · r${data.scene.revision}`);return result;}catch(err){status('error','Perlu diperiksa');showError('Operasi gagal',err.message);throw err;}finally{inFlight--;}}
+function safeID(prefix){return prefix+'-'+(globalThis.crypto?.randomUUID?.().slice(0,8)||Math.random().toString(36).slice(2,10));}
+function spawnPosition(furniture){const offset=(data?.scene.entities.length||0)%6;return furniture?[0.6+offset*.22,0,-.7+offset*.21]:[0.35+offset*.19,.82,.4+offset*.14];}
+async function execute(kind,payload){const e=currentEntity();try{
+ switch(kind){
+  case 'spawn-character':{const role=payload;const id=safeID('human');await mutate([{type:'spawn_character',id,role,name:role==='doctor'?'Dokter baru':'Pasien baru',position:role==='doctor'?[-1.7,0,1.3]:[1.1,0,1.3]}]);choose(id);stopPane();notice('Boneka ditambahkan');break;}
+  case 'spawn-asset':{const a=data.assets.find(x=>x.id===payload);if(!a)throw Error('Aset tidak ada dalam katalog');const id=safeID('object');await mutate([{type:'spawn_asset',id,assetId:a.id,position:spawnPosition(a.category==='Furnitur')}]);choose(id);stopPane();notice(a.name+' ditambahkan');break;}
+  case 'joint-reset':if(e&&selectedJoint)await mutate([{type:'set_joint',entityId:e.id,joint:selectedJoint,axis,angle:0}]);break;
+  case 'pose-standing':case 'pose-sitting':if(e)await mutate([{type:'apply_pose',entityId:e.id,presetId:kind.replace('pose-','')}]);break;
+  case 'move':if(!e)return;moveMode=!moveMode;renderer.setMode(moveMode?'move':'select');renderSelection();notice(moveMode?'Seret objek untuk menggeser. Tekan “Selesai geser” setelah selesai.':'Mode geser selesai');break;
+  case 'attach-doctor':case 'attach-patient':if(e)await mutate([{type:'attach',entityId:e.id,targetId:kind.replace('attach-',''),anchor:'rightHand'}]);break;
+  case 'detach':if(e)await mutate([{type:'detach',entityId:e.id}]);break;
+  case 'duplicate':if(e?.type==='asset'){const id=safeID('copy');await mutate([{type:'spawn_asset',id,assetId:e.assetId,position:[e.position[0]+.25,e.position[1],e.position[2]+.25],rotation:e.rotation}]);choose(id);}break;
+  case 'delete':if(e&&confirm('Hapus '+e.name+' dari scene?')){await mutate([{type:'delete_entity',entityId:e.id}]);choose(null);}break;
+  case 'save':{const r=await performTool('save_scene',{},null);if(!r.stored)throw Error('Server tidak memiliki penyimpanan permanen');notice('Scene disimpan di server');break;}
+  case 'undo':await performTool('undo_scene',{},'Undo selesai');break;
+  case 'redo':await performTool('redo_scene',{},'Redo selesai');break;
+  case 'reset-camera':renderer.resetCamera();notice('Kamera kembali ke posisi awal');break;
+  case 'export':download('osce-playground-r'+data.scene.revision+'.json',JSON.stringify(data,null,2));notice('Cadangan diunduh');break;
+  case 'import':$('importFile').click();break;
+  case 'reset-world':if(confirm('Reset seluruh scene ke kondisi awal? Ini mengubah proyek tersimpan.')){await performTool('reset_world',{confirmed:true},'Scene dikembalikan ke awal');stopPane();}break;
+  case 'check-mcp':{
+    const summary=$('diagSummary');
+    if(embedded&&!previewHost){
+      const scene=await tool('get_world_state');
+      if(summary)summary.textContent=`Host ${hostKind} terhubung · revisi ${scene.scene.revision}.`;
+    }else{
+      const count=hosted?(await api('/api/connection')).toolCount:(await api('/mcp','POST',{jsonrpc:'2.0',id:1,method:'tools/list',params:{}})).result?.tools?.length;
+      if(!count)throw Error('Katalog MCP tidak tersedia');
+      if(summary)summary.textContent=`Server MCP menyediakan ${count} tool · /mcp`;
+    }
+    notice('Pemeriksaan MCP berhasil');break;
+  }
+  case 'sync-now':await reload({force:true});notice('Sinkronisasi diperiksa');break;
+  case 'set-token':session.setItem('osce-studio-token',$('serverToken').value.trim());await reload({force:true});if(data)stopPane();notice('Token sesi diperbarui');break;
+  case 'discard-draft':if(confirm('Buang perubahan lokal yang belum terkirim?')){pending=[];pendingRevision=null;storeDraft();await reload({force:true});clearError();}break;
+  case 'load-log':{const logs=await tool('get_execution_log');const array=Array.isArray(logs)?logs:logs.result||[];const holder=$('recentLog');if(holder)holder.innerHTML=array.slice(0,12).map(l=>`<div class="status-desc">${esc(l.label)} · r${esc(l.revision)}<br><span class="meta">${esc(l.at)}</span></div>`).join('')||'<p>Belum ada riwayat.</p>';break;}
+  case 'validate-asset':case 'create-asset':{const raw=$('assetJSON').value;window.__assetDraft=raw;const a=JSON.parse(raw);const r=await performTool(kind==='create-asset'?'create_asset':'validate_asset',kind==='create-asset'?a:{asset:a});notice(kind==='create-asset'?'Aset tersedia di katalog':'Aset valid: '+r.partCount+' bagian');break;}
+  case 'validate-behavior':case 'create-behavior':{const raw=$('behaviorJSON').value;window.__behaviorDraft=raw;const b=JSON.parse(raw);const r=await performTool(kind==='create-behavior'?'create_behavior':'validate_behavior',kind==='create-behavior'?b:{behavior:b});notice(kind==='create-behavior'?'Perilaku disimpan':'Perilaku valid: '+r.transitionCount+' transisi');break;}
+  case 'send-chat':case 'copy-chat':case 'open-chat':{
+    const prompt=$('aiPrompt')?.value.trim()||'';if(!prompt)throw Error('Tulis instruksi terlebih dahulu');window.__lastPrompt=prompt;
+    const full=prompt+'\n\n'+DEFAULT_COMMAND;
+    if(kind==='send-chat'){
+      if(window.openai?.sendFollowUpMessage)await window.openai.sendFollowUpMessage({prompt:full});
+      else if(hostReady)await hostRpc('ui/message',{role:'user',content:[{type:'text',text:full}]});
+      else throw Error('Host ChatGPT tidak terhubung.');
+      notice('Instruksi dikirim ke ChatGPT');stopPane();
+    }else if(kind==='copy-chat'){
+      if(!navigator.clipboard?.writeText)throw Error('Clipboard tidak tersedia. Buka situs melalui HTTPS/localhost.');await navigator.clipboard.writeText(full);notice('Instruksi disalin. Tempel di ChatGPT yang terhubung ke plugin OSCE.');
+    }else window.open('https://chatgpt.com/','_blank','noopener,noreferrer');
+    break;
+  }
+ }
+ }catch(err){showError('Tindakan gagal',err.message);notice(err.message,true);}}
+function download(name,text){const blob=new Blob([text],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);}
+
+// Renderer initialization and user feedback.
+try{renderer=createRenderer($('scene3d'),$('hotspots'),{
+ onRendererStatus:setRendererStatus,onRendererError:e=>showError('Renderer bermasalah',e.message),
+ onSelect(id,joint){choose(id,joint);},
+ onPreviewJoint(id,joint,which,value){const output=$('jointReadout');if(output&&selected===id&&selectedJoint===joint)output.textContent=value+'°';const range=$('jointRange');if(range&&selected===id&&selectedJoint===joint)range.value=value;},
+ onPreviewPosition(id,p){if(selected===id)$('selectionKicker').textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');},
+ onCommitJoint(id,joint,which,value){mutate([{type:'set_joint',entityId:id,joint,axis:which,angle:value}]).catch(()=>{});},
+ onCommitPosition(id,position){mutate([{type:'move_entity',entityId:id,position}]).catch(()=>{});}
+});}catch(err){showError('Grafis tidak dapat dimulai',err.message);loadingFailure(err.message);}
+
+// Event delegation: every visible control has a concrete action.
+document.querySelectorAll('[data-panel]').forEach(button=>button.addEventListener('click',()=>openPane(button.dataset.panel)));
+$('moreBtn').addEventListener('click',()=>openPane('more'));
+$('syncButton').addEventListener('click',()=>openPane('diagnostics'));
+$('sheetClose').addEventListener('click',stopPane);
+$('selectionClose').addEventListener('click',()=>choose(null));
+$('resetCamera').addEventListener('click',()=>execute('reset-camera'));
+$('focusBtn').addEventListener('click',()=>{if(selected)renderer.focusEntity(selected)});
+$('undoBtn').addEventListener('click',()=>execute('undo'));
+$('saveBtn').addEventListener('click',()=>execute('save'));
+$('errorDismiss').addEventListener('click',clearError);
+$('retryLoad').addEventListener('click',()=>{showLoading('Menghubungkan ulang…');reload({force:true}).catch(()=>{});});
+$('sheetBody').addEventListener('click',async event=>{
+ const b=event.target.closest('button');if(!b)return;
+ if(b.dataset.open){openPane(b.dataset.open);return;}
+ if(b.dataset.cat){category=b.dataset.cat;renderPane();return;}
+ if(b.dataset.spawn)await execute('spawn-asset',b.dataset.spawn);
+ if(b.dataset.spawnCharacter)await execute('spawn-character',b.dataset.spawnCharacter);
+ if(b.dataset.entity){choose(b.dataset.entity);stopPane();return;}
+ if(b.dataset.ui)await execute(b.dataset.ui);
+});
+$('sheetBody').addEventListener('change',async event=>{
+ const b=event.target;
+ if(b.id==='scenarioPicker'&&b.value!=='custom')await mutate([{type:'set_scenario',templateId:b.value}]).catch(()=>{});
+ if(b.matches('[data-step]'))await mutate([{type:b.checked?'complete_step':'uncomplete_step',index:Number(b.dataset.step)}]).catch(()=>{});
+});
+$('sheetBody').addEventListener('input',event=>{if(event.target.id==='assetJSON')window.__assetDraft=event.target.value;if(event.target.id==='behaviorJSON')window.__behaviorDraft=event.target.value;if(event.target.id==='aiPrompt')window.__lastPrompt=event.target.value;});
+$('selectionBody').addEventListener('click',async event=>{
+ const b=event.target.closest('button');if(!b)return;
+ if(b.dataset.axis){axis=b.dataset.axis;renderer.setAxis(axis);renderSelection();return;}
+ if(b.dataset.action&&currentEntity())await mutate([{type:'trigger_action',entityId:selected,action:b.dataset.action}]).catch(()=>{});
+ if(b.dataset.operation)await execute(b.dataset.operation);
+});
+$('selectionBody').addEventListener('change',async event=>{
+ const b=event.target;if(!currentEntity())return;
+ if(b.id==='jointPicker'){selectedJoint=b.value;axis='flexion';renderer.setSelected(selected,selectedJoint);renderSelection();}
+ if(b.id==='jointRange')await mutate([{type:'set_joint',entityId:selected,joint:selectedJoint,axis,angle:Number(b.value)}]).catch(()=>{});
+ if(b.id==='rotateRange')await mutate([{type:'rotate_entity',entityId:selected,rotation:[0,Number(b.value)*Math.PI/180,0]}]).catch(()=>{});
+});
+$('selectionBody').addEventListener('input',event=>{
+ const b=event.target;if(!data||!currentEntity())return;
+ if(b.id==='jointRange'){const value=Number(b.value);currentEntity().pose[selectedJoint][axis]=value;const read=$('jointReadout');if(read)read.textContent=value+'°';}
+ if(b.id==='rotateRange'){currentEntity().rotation[1]=Number(b.value)*Math.PI/180;const read=$('rotateReadout');if(read)read.textContent=b.value+'°';}
+});
+$('importFile').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{if(file.size>1_500_000)throw Error('File terlalu besar (maksimal 1,5 MB)');const parsed=JSON.parse(await file.text());if(!confirm('Timpa scene saat ini dengan file ini?'))return;if(embedded)throw Error('Impor snapshot hanya tersedia lewat situs mandiri karena tool restore belum dipublikasikan pada host.');await api('/api/restore','POST',{snapshot:parsed,baseRevision:data.scene.revision});await reload({force:true});notice('Scene dipulihkan dari file');}catch(err){showError('Impor gagal',err.message);}finally{event.target.value='';}});
+document.addEventListener('keydown',event=>{const inField=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(event.key==='Escape'){if(pane)stopPane();else choose(null);}if(!inField&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();execute(event.shiftKey?'redo':'undo');}});
+window.addEventListener('online',()=>reload({quiet:true,force:true}).catch(()=>{}));
+window.addEventListener('unhandledrejection',event=>{showError('Proses gagal',event.reason?.message||'Permintaan tidak selesai.');});
+
+async function boot(){
+ showLoading();draft=getDraft();
+ if(draft){pending=draft.operations;pendingRevision=draft.baseRevision;if(draft.snapshot){try{applyData(draft.snapshot);status('error',`Draft lokal · ${pending.length}`);}catch{}}}
+ try{
+  await initializeBridge();
+  const initial=window.openai?.toolOutput?.scene?window.openai.toolOutput:null;
+  if(initial&&!data)applyData(initial);
+  await reload({force:true});
+  if(frameReady)hideLoading();
+ }catch(err){if(!data)loadingFailure(err.message);showError('Studio belum terhubung',err.message);}
+ // Poll only while visible, in the absence of local unsaved activity. The MCP host may not expose SSE.
+ setInterval(()=>{if(document.hidden||inFlight||refreshLock||embedded&&!hostReady&&!previewHost)return;reload({quiet:true}).catch(()=>{});},5000);
+}
+boot();
+
+if(!hosted && !embedded && 'serviceWorker' in navigator && (location.protocol==='https:' || ['127.0.0.1','localhost'].includes(location.hostname))){
+ window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(error=>{console.warn('PWA cache unavailable:',error.message)}));
+}

@@ -15,12 +15,16 @@ export class Studio extends StudioModel {
         throw new SceneError('Data studio gagal dimuat: '+error.message,'STORAGE_CORRUPT',500);
       }
     }
-    super(loaded, storageFile ? state => {
-      fs.mkdirSync(path.dirname(storageFile),{recursive:true});
-      const temp=storageFile+'.tmp';
-      fs.writeFileSync(temp,JSON.stringify(state,null,2));
-      fs.renameSync(temp,storageFile);
-    } : null);
+    super(loaded);
+    this.storageFile=storageFile;
+  }
+  get hasPersistentStorage(){return Boolean(this.storageFile);}
+  persist() {
+    if (!this.storageFile) return;
+    fs.mkdirSync(path.dirname(this.storageFile),{recursive:true});
+    const temp=this.storageFile+'.tmp';
+    fs.writeFileSync(temp,JSON.stringify(this.current(),null,2));
+    fs.renameSync(temp,this.storageFile);
   }
 }
 
