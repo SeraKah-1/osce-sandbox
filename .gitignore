@@ -1,0 +1,10 @@
+node_modules/
+data/*.json
+.env
+.DS_Store
+*.log
+coverage/
+dist/
+.env.*
+!.env.example
+!.env.production.example

@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": 100,
+  "method": "tools/call",
+  "params": {
+    "name": "apply_scene_operations",
+    "arguments": {
+      "baseRevision": 0,
+      "operations": [
+        {"type": "set_scenario", "templateId": "blood-pressure"},
+        {"type": "apply_pose", "entityId": "patient", "presetId": "sitting"},
+        {"type": "spawn_asset", "id": "sample-cuff", "assetId": "cuff", "position": [0.5,0.8,0.4]}
+      ]
+    }
+  }
+}

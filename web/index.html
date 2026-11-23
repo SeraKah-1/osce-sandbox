@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="id"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0d2635"><meta name="description" content="Tablet-first OSCE sandbox studio: 3D characters, clinical equipment and AI builder via MCP">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><title>OSCE Sandbox Studio</title>
+</head><body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand" id="homeBrand"><div class="brandmark">✣</div><div class="brandtext"><strong>OSCE <span>STUDIO</span></strong><small>3D CLINICAL SANDBOX</small></div></div>
+    <div class="top-center"><span class="topic-dot"></span><span id="sceneTitle">OSCE Examination Studio</span><span class="version-chip">v0.2</span></div>
+    <div class="top-actions"><button class="icon-btn" id="undoBtn" title="Undo" aria-label="Undo">↶</button><button class="icon-btn" id="redoBtn" title="Redo" aria-label="Redo">↷</button><button class="text-btn ghost" id="exportBtn">⇩ <span>Ekspor</span></button><button class="text-btn primary" id="saveBtn"><span class="cloud-icon">●</span><span>Simpan</span></button></div>
+  </header>
+  <main class="workspace">
+    <div class="stage" id="stage">
+      <canvas id="scene3d" aria-label="Viewport 3D OSCE: drag satu jari untuk rotate, pinch dua jari untuk zoom" tabindex="0"></canvas>
+      <div class="hotspots" id="hotspots" aria-hidden="true"></div>
+      <div class="stage-gradient"></div>
+      <div class="scene-status"><span class="live-circle"></span><span id="syncStatus">LOCAL STUDIO</span><span class="scene-status-sep">·</span><span id="entityCount">5 objects</span></div>
+      <div class="orientation"><span>3D VIEW</span><button id="resetCamera" title="Reset kamera">⌖</button></div>
+      <div class="left-rail">
+        <button class="rail-btn active" data-panel="scene" title="Objek dalam ruangan"><span class="rail-icon">▦</span><small>SCENE</small></button>
+        <button class="rail-btn" data-panel="assets" title="Katalog instrumen"><span class="rail-icon">⚕</span><small>ASSETS</small></button>
+        <button class="rail-btn" data-panel="builder" title="Buat alat baru"><span class="rail-icon">◈</span><small>BUILDER</small></button>
+        <button class="rail-btn" data-panel="scenario" title="Skenario OSCE"><span class="rail-icon">☷</span><small>OSCE</small></button>
+        <div class="rail-gap"></div>
+        <button class="rail-btn" data-panel="connection" title="Koneksi MCP"><span class="rail-icon">⌘</span><small>MCP</small></button>
+      </div>
+      <div class="tool-pill" role="toolbar" aria-label="Mode interaksi">
+        <button class="mode-btn active" data-mode="select"><span>⌖</span><small>Pilih</small></button>
+        <button class="mode-btn" data-mode="move"><span>✥</span><small>Geser</small></button>
+        <button class="mode-btn" data-mode="pose"><span>◉</span><small>Sendi</small></button>
+      </div>
+      <div class="camera-hint">☞ <span>Drag orbit</span> <i></i> ⇕ <span>Pinch zoom</span> <i></i> ◉ <span>Tap joint</span></div>
+      <div class="side-panel" id="sidePanel">
+        <div class="panel-header"><div><small id="panelEyebrow">SCENE EXPLORER</small><h2 id="panelTitle">Objek ruangan</h2></div><button class="icon-btn panel-close" id="panelClose" aria-label="Tutup panel">×</button></div>
+        <div id="panelBody" class="panel-body"></div>
+      </div>
+      <div class="inspector" id="inspector">
+        <div class="inspector-handle"></div><div class="inspector-top"><div><small id="inspectorType">SELECT AN OBJECT</small><strong id="inspectorName">Pilih boneka atau alat</strong></div><button class="icon-btn" id="focusBtn" title="Fokus kamera">⌕</button></div>
+        <div id="inspectorContent" class="inspector-content"><p class="muted">Tap boneka, sendi, atau instrumen untuk mengedit posisinya.</p></div>
+      </div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </main>
+  <footer class="footer"><span>OSCE SANDBOX · EXPERIMENTAL</span><span>Pose &amp; instrumen = simulasi visual, bukan validasi klinis</span><span id="revisionText">REV 0</span></footer>
+</div>
+<script type="module" src="/app.js"></script>
+</body></html>

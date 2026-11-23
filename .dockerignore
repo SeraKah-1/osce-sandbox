@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.env.production
+.env.production.example
+node_modules
+data
+*.zip
+*.log
+coverage
+__pycache__
+docs/tablet-preview-fallback.png

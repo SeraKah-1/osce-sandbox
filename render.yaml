@@ -1,0 +1,21 @@
+# Render Blueprint (paid Starter web service for persistent disk).
+# HTTPS is provided by Render. The API_TOKEN is generated during first setup.
+services:
+  - type: web
+    name: osce-sandbox-studio
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 4173
+      - key: STUDIO_DATA
+        value: /app/data/studio.json
+      - key: API_TOKEN
+        generateValue: true
+    disk:
+      name: osce-data
+      mountPath: /app/data
+      sizeGB: 1

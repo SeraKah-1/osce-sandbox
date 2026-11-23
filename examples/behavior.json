@@ -1,0 +1,10 @@
+{
+  "id": "osce-demo-switch",
+  "name": "Switch simulasi",
+  "states": ["off", "on"],
+  "initial": "off",
+  "transitions": [
+    {"from": "off", "action": "enable", "to": "on", "label": "Nyalakan"},
+    {"from": "on", "action": "disable", "to": "off", "label": "Matikan"}
+  ]
+}
