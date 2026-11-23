@@ -35,9 +35,9 @@
  <header class="topbar">
   <div class="brand"><div class="brand-symbol" aria-hidden="true">✳</div><div class="brand-name"><span class="brand-main">OSCE <em>Playground</em></span><small id="sceneTitle">My Studio</small></div></div>
   <div class="top-actions">
-   <button class="status-pill" id="syncButton" type="button" title="Status sinkronisasi dan koneksi"><span class="status-led" id="statusLed"></span><span id="syncStatus">Memuat...</span></button>
+   <button class="status-pill" id="syncButton" type="button" title="Info sesi sementara"><span class="status-led" id="statusLed"></span><span id="syncStatus">Sesi sementara</span></button>
    <button class="icon-button" id="undoBtn" type="button" aria-label="Urungkan perubahan" title="Undo"><svg><use href="#i-undo"/></svg></button>
-   <button class="icon-button" id="saveBtn" type="button" aria-label="Simpan" title="Simpan"><svg><use href="#i-cloud"/></svg></button>
+
    <button class="icon-button" id="moreBtn" type="button" aria-label="Menu lainnya" title="Menu lainnya"><svg><use href="#i-more"/></svg></button>
   </div>
  </header>
@@ -50,7 +50,7 @@
     <button class="camera-control" id="resetCamera" type="button" title="Reset kamera" aria-label="Reset kamera"><svg><use href="#i-focus"/></svg></button>
    </div>
    <div class="renderer-pill" id="rendererPill" hidden></div>
-   <div class="interaction-hint" id="interactionHint">Tarik tubuh, tangan, atau kaki · cubit untuk zoom</div>
+   <div class="interaction-hint" id="interactionHint">Tarik boneka langsung · Lepas untuk membekukan · Cubit untuk zoom</div>
    <div class="loading-overlay" id="loadingOverlay" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Menyiapkan playground…</strong><small id="loadingDetail">Memuat scene</small><button type="button" class="soft-button" id="retryLoad" hidden>Coba lagi</button></div>
    <div class="error-bar" id="errorBar" role="alert" hidden><svg><use href="#i-alert"/></svg><div class="error-copy"><strong id="errorTitle">Ada masalah</strong><span id="errorText"></span></div><button type="button" id="errorDismiss" aria-label="Tutup error"><svg><use href="#i-close"/></svg></button></div>
    <section class="sheet" id="sheet" aria-label="Panel" hidden>
@@ -71,7 +71,7 @@
  </main>
  <footer class="footnote"><span>Playground 3D · Tablet-first</span><span>Visual latihan, bukan pengukuran medis</span></footer>
 </div>
-<input type="file" id="importFile" accept="application/json,.json" hidden>
+
 <script type="module" src="/app.js"></script>
 </body>
 </html>

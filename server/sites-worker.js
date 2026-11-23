@@ -1,9 +1,10 @@
-import {SceneError, Studio} from './studio.js';
+import {SceneError} from './studio.js';
+import {SiteSessions} from './site-sessions.js';
 import {rpc, toolsList} from './mcp-protocol.js';
 import {renderWidget} from './widget-template.js';
 import assets from './assets.js';
 
-const widget = renderWidget(assets['index.html'], assets['styles.css'], assets['render3d.js'], assets['app.js'], assets['touch-pose.js']);
+const widget = renderWidget(assets);
 const mime = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
@@ -36,47 +37,28 @@ async function bodyJson(request) {
   catch { throw new SceneError('JSON tidak valid'); }
 }
 
-async function openProject(bucket,identity) {
-  if (!identity) throw missingIdentity();
-  if (!bucket) throw new SceneError('Penyimpanan proyek belum tersedia.','STORAGE_UNAVAILABLE',503);
-  const key='projects/'+encodeURIComponent(identity)+'.json';
-  const object=await bucket.get(key);
-  const state=object ? await object.json() : null;
-  const studio=new Studio(state);
-  const revision=studio.scene.revision;
-
-  return {studio, async commit(force=false) {
-    if (!force && studio.scene.revision===revision) return;
-    if (force && object && studio.scene.revision===revision) return;
-    const onlyIf=object ? {etagMatches:object.etag} : new Headers({'If-None-Match':'*'});
-    const state=studio.storedState();
-    const serialized=JSON.stringify(state);
-    if (new TextEncoder().encode(serialized).length>12_000_000) {
-      throw new SceneError('Proyek dan riwayat melebihi batas penyimpanan.','PROJECT_TOO_LARGE',413);
-    }
-    const result=await bucket.put(key,serialized,{onlyIf,httpMetadata:{contentType:'application/json'}});
-    if (!result) throw new SceneError('Revisi konflik. Muat ulang proyek sebelum mengedit.','REVISION_CONFLICT',409);
-  }};
+async function startSession(sessions,context){
+  const started=await sessions.create();
+  context?.waitUntil?.(sessions.sweep().catch(()=>console.error('Session cleanup failed')));
+  return started;
 }
 
-async function control(request,bucket,identity) {
+async function control(request,bucket,identity,context) {
   if (request.method!=='POST') return new Response(null,{status:405,headers:{Allow:'POST',...safeHeaders}});
   const body=await bodyJson(request);
   if (body?.jsonrpc==='2.0' && body.method==='tools/call' && body.id!==undefined) {
     try {
-      const project=await openProject(bucket,identity);
-      const save=body.params?.name==='save_scene';
+      const name=body.params?.name;
+      if(!toolsList.some(tool=>tool.name===name))throw new SceneError('Tool tidak tersedia.','NOT_FOUND',404);
+      const sessions=new SiteSessions(bucket,identity);
+      let id=body.params?.arguments?.sessionId;
+      if(name==='open_studio'&&!id)id=(await startSession(sessions,context)).sessionId;
+      const project=await sessions.open(id);
       const reply=rpc(project.studio,body,()=>widget);
-      if (reply?.result?.isError===false) {
-        await project.commit(save);
-        if (save) {
-          reply.result.structuredContent.stored=true;
-          reply.result.content[0].text=JSON.stringify(reply.result.structuredContent);
-        }
-      }
+      if (reply?.result?.isError===false) await project.commit();
       return json(reply);
     } catch (error) {
-      const problem=error instanceof SceneError ? error : new SceneError('Penyimpanan proyek gagal.','STORAGE_ERROR',500);
+      const problem=error instanceof SceneError ? error : new SceneError('Penyimpanan sesi gagal.','STORAGE_ERROR',500);
       return json({jsonrpc:'2.0',id:body.id,result:{isError:true,content:[{type:'text',text:JSON.stringify({error:problem.message,code:problem.code})}]}});
     }
   }
@@ -84,14 +66,52 @@ async function control(request,bucket,identity) {
   return reply===null ? new Response(null,{status:202,headers:safeHeaders}) : json(reply);
 }
 
-async function studioApi(request,pathname,bucket,identity) {
+function sessionEvents(sessions,id,signal,revision){
+  const deadline=Date.now()+24_000;
+  const encoder=new TextEncoder();
+  let active=true;
+  const stream=new ReadableStream({
+    start(controller){controller.enqueue(encoder.encode(': connected\n\n'));},
+    async pull(controller){
+      if(!active||signal.aborted||Date.now()>=deadline){if(active)controller.close();return;}
+      await new Promise(resolve=>setTimeout(resolve,1600));
+      if(!active)return;
+      try{
+        const next=await sessions.revision(id);
+        if(!active)return;
+        const message=next>revision?'event: scene_updated\ndata: '+JSON.stringify({revision:next})+'\n\n':': waiting\n\n';
+        revision=next;
+        controller.enqueue(encoder.encode(message));
+      }catch(error){
+        if(!active)return;
+        if(error.code==='SESSION_EXPIRED')controller.enqueue(encoder.encode('event: session_expired\ndata: {}\n\n'));
+        controller.close();
+      }
+    },
+    cancel(){active=false;},
+  });
+  return new Response(stream,{headers:{...safeHeaders,'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'}});
+}
+
+async function studioApi(request,pathname,bucket,identity,context) {
   if (!identity) throw missingIdentity();
-  if (request.method==='GET' && pathname==='/api/connection') return json({toolCount:toolsList.length,version:'0.4.0'});
-  const project=await openProject(bucket,identity);
+  const route=request.method+' '+pathname;
+  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'0.6.0'});
+  const sessions=new SiteSessions(bucket,identity);
+  if (route==='POST /api/session') return json(await startSession(sessions,context),201);
+  if (route==='POST /api/save') return json({error:'Sesi sementara: penyimpanan permanen dinonaktifkan.'},410);
+  const id=request.headers.get('x-studio-session');
+  if (route==='DELETE /api/session'){await sessions.close(id);return json({ok:true,reset:true});}
+  if (route==='GET /api/events') {
+    const current=await sessions.revision(id);
+    const requested=new URL(request.url).searchParams.get('since');
+    const since=requested!==null && /^\d+$/.test(requested) ? Math.min(current,Number(requested)) : current;
+    return sessionEvents(sessions,id,request.signal,since);
+  }
+  const project=await sessions.open(id);
   const {studio}=project;
   const method=request.method;
-  const route=method+' '+pathname;
-  if (route==='GET /api/state') return json(studio.snapshot());
+  if (route==='GET /api/state') return json({sessionId:id,...studio.snapshot()});
   if (route==='GET /api/log') return json(studio.log);
   if (!['POST','PATCH'].includes(method)) return json({error:'Endpoint tidak tersedia'},404);
 
@@ -105,9 +125,6 @@ async function studioApi(request,pathname,bucket,identity) {
     case 'POST /api/validate-asset': return json(studio.validateAssetDraft(payload));
     case 'POST /api/validate-behavior': return json(studio.validateBehaviorDraft(payload));
     case 'POST /api/behavior-test': return json(studio.validateBehaviorTest(payload.behaviorId,payload.actions));
-    case 'POST /api/save':
-      await project.commit(true);
-      return json({ok:true,stored:true,revision:studio.scene.revision});
     case 'POST /api/undo': result=studio.historyMove('undo');break;
     case 'POST /api/redo': result=studio.historyMove('redo');break;
     case 'POST /api/restore': result=studio.restore(payload.snapshot,payload.baseRevision);break;
@@ -127,26 +144,22 @@ async function studioApi(request,pathname,bucket,identity) {
 const signInPage='<!doctype html><html lang="id"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OSCE Sandbox Studio</title><link rel="stylesheet" href="/styles.css"><style>main{max-width:38rem;margin:15vh auto;padding:2rem}a{display:inline-block;color:inherit}</style><main><h1>OSCE Sandbox Studio</h1><p>Atur posisi karakter dan rakit alat di editor 3D untuk latihan OSCE.</p><a class="panel-btn" href="/signin-with-chatgpt?return_to=%2F" target="_top">Masuk dengan ChatGPT</a></main></html>';
 
 export default {
-  async fetch(request,env) {
+  async fetch(request,env,context) {
     const url=new URL(request.url);
     const pathname=url.pathname;
     const identity=request.headers.get('oai-authenticated-user-id');
     try {
-      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.4.0'},env.STUDIO?200:503);
+      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.6.0',persistentProjects:false},env.STUDIO?200:503);
       if (pathname==='/mcp' || pathname.startsWith('/api/')) {
         const origin=request.headers.get('Origin');
         if (origin && origin!==url.origin) throw new SceneError('Origin tidak diizinkan.','FORBIDDEN',403);
-        return pathname==='/mcp' ? await control(request,env.STUDIO,identity) : await studioApi(request,pathname,env.STUDIO,identity);
+        return pathname==='/mcp' ? await control(request,env.STUDIO,identity,context) : await studioApi(request,pathname,env.STUDIO,identity,context);
       }
       if (!['GET','HEAD'].includes(request.method)) return new Response(null,{status:405,headers:{Allow:'GET, HEAD'}});
       const file=pathname==='/' ? 'index.html' : pathname.slice(1);
       if (!Object.hasOwn(assets,file) || file.startsWith('widget')) return json({error:'Halaman tidak ditemukan'},404);
       const contentType=mime[file.split('.').at(-1)] || 'application/octet-stream';
-      let content=assets[file];
-      if (file==='index.html') {
-        const scope=identity ? new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity))) : null;
-        content=scope ? content.replace('__STUDIO_DRAFT_SCOPE__',Array.from(scope,b=>b.toString(16).padStart(2,'0')).join('')) : signInPage;
-      }
+      const content=file==='index.html' && !identity ? signInPage : assets[file];
       return new Response(request.method==='HEAD' ? null : content,{headers:{...safeHeaders,'Content-Type':contentType,'Content-Security-Policy':siteCsp}});
     } catch (error) {
       const problem=error instanceof SceneError ? error : new SceneError('Permintaan studio gagal.','INTERNAL_ERROR',500);

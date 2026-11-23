@@ -42,10 +42,10 @@ export const TEMPLATES = [
  {id:'blood-pressure',name:'Pemeriksaan Tekanan Darah',category:'Tanda Vital',patient:{name:'Pasien simulasi',age:52,complaint:'Pemeriksaan tekanan darah'},steps:['Perkenalan dan persetujuan','Posisikan pasien dan lengan','Pasang manset demonstrasi','Lakukan simulasi pengukuran','Catat dan sampaikan hasil skenario'],note:'Pembacaan tekanan darah berasal dari kasus, bukan hasil perhitungan fisiologis.'},
  {id:'neuro',name:'Pemeriksaan Neurologis Dasar',category:'Neurologi',patient:{name:'Pasien simulasi',age:37,complaint:'Keluhan baal pada tangan'},steps:['Perkenalan dan persetujuan','Inspeksi','Pemeriksaan refleks sesuai referensi','Pemeriksaan sensorik simulasi','Dokumentasi'],note:'Respons refleks/sensorik adalah temuan skenario, bukan simulasi saraf.'}
 ];
-const neutralPose = () => ({rightShoulder:{flexion:0,abduction:8,rotation:0},leftShoulder:{flexion:0,abduction:-8,rotation:0},rightElbow:{flexion:0,rotation:0},leftElbow:{flexion:0,rotation:0},rightWrist:{flexion:0},leftWrist:{flexion:0},rightHip:{flexion:0,abduction:0},leftHip:{flexion:0,abduction:0},rightKnee:{flexion:0},leftKnee:{flexion:0},rightAnkle:{flexion:0},leftAnkle:{flexion:0},neck:{flexion:0,rotation:0},spine:{flexion:0,rotation:0}});
+const neutralPose = () => ({rightShoulder:{flexion:0,abduction:8,rotation:0},leftShoulder:{flexion:0,abduction:-8,rotation:0},rightElbow:{flexion:0,rotation:0},leftElbow:{flexion:0,rotation:0},rightWrist:{flexion:0},leftWrist:{flexion:0},rightHip:{flexion:0,abduction:0,rotation:0},leftHip:{flexion:0,abduction:0,rotation:0},rightKnee:{flexion:0},leftKnee:{flexion:0},rightAnkle:{flexion:0},leftAnkle:{flexion:0},neck:{flexion:0,rotation:0},spine:{flexion:0,rotation:0}});
 export const POSES = {
  standing: neutralPose(),
- sitting: {...neutralPose(),rightHip:{flexion:-90,abduction:0},leftHip:{flexion:-90,abduction:0},rightKnee:{flexion:90},leftKnee:{flexion:90}},
+ sitting: {...neutralPose(),rightHip:{flexion:-90,abduction:0,rotation:0},leftHip:{flexion:-90,abduction:0,rotation:0},rightKnee:{flexion:90},leftKnee:{flexion:90}},
  'right-shoulder-abduction': {...neutralPose(),rightShoulder:{flexion:0,abduction:95,rotation:0}},
  'raised-arm': {...neutralPose(),rightShoulder:{flexion:125,abduction:0,rotation:0},rightElbow:{flexion:35}}
 };

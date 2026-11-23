@@ -1,25 +1,22 @@
 import {createRenderer} from './render3d.js';
 
-// OSCE Playground v0.4. The same UI runs as a standalone site and an MCP App.
+// OSCE Playground v0.6. All scenes are temporary and movement is local-first.
 // In an embedded app, mutations go through the host MCP bridge; no simulated AI responses.
 const $=id=>document.getElementById(id);
 const embedded=Boolean(window.__OSCE_EMBEDDED__);
 const previewHost=location.pathname==='/widget' && window.parent===window;
-const hosted=!embedded && Boolean(document.querySelector('meta[name="studio-host"]'));
-const draftScope=document.querySelector('meta[name="studio-draft-scope"]')?.content;
+const hosted=!embedded&&Boolean(document.querySelector('meta[name="studio-host"]'));
 const icon=name=>`<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>Number(n||0).toFixed(2);
 const session=(()=>{try{return sessionStorage}catch{return {getItem:()=>null,setItem:()=>{}}}})();
-const storage=(()=>{try{return embedded ? sessionStorage : localStorage}catch{return {getItem:()=>null,setItem:()=>{},removeItem:()=>{}}}})();
-const draftSuffix=hosted ? ':'+draftScope : '';
-const DRAFT_KEY='osce-playground-v04-draft'+draftSuffix;
-const LEGACY_DRAFT_KEY='osce-playground-v03-draft'+draftSuffix;
+
+
 const DEFAULT_COMMAND='Buat ruang latihan OSCE yang sederhana. Atur dokter dan pasien, pose awal, serta alat yang diperlukan. Gunakan OSCE Sandbox Studio MCP: baca get_world_state dan get_asset_catalog terlebih dahulu; validasi aset/perilaku baru dan panggil preview_scene_operations untuk perubahan besar; lalu terapkan perubahan dengan baseRevision yang terbaru. Jelaskan keterbatasan simulasi klinis.';
-let data=null,selected=null,selectedJoint=null,axis='flexion',pane=null,category='all',selectionExpanded=false;
-let pending=[],pendingRevision=null,draft=null,queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false;
+let data=null,selected=null,selectedJoint=null,pane=null,category='all',selectionExpanded=false;
+let queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false,sessionId=null,remoteDirty=false,remoteRevision=0,eventAbort=null,sessionClosed=false;
 let lastError='',renderer,toastTimer,hostReady=false,hostKind='local',frameReady=false;
-const bridgePending=new Map();let bridgeCounter=0, bridgeOrigin='*';
+const bridgePending=new Map();let bridgeCounter=0,bridgeOrigin='*',initialWidgetState=null,receiveInitial;
 
 function status(phase,label){$('syncStatus').textContent=label;$('statusLed').className='status-led '+(phase==='ok'?'ok':phase==='pending'?'pending':phase==='error'?'error':'');$('syncButton').dataset.state=phase;}
 function notice(text,error=false){const target=$('toast');clearTimeout(toastTimer);target.textContent=text;target.hidden=false;target.classList.toggle('error',error);toastTimer=setTimeout(()=>{target.hidden=true},error?6000:2500);}
@@ -28,18 +25,20 @@ function clearError(){$('errorBar').hidden=true;lastError='';}
 function showLoading(message='Memuat scene'){$('loadingOverlay').hidden=false;$('loadingDetail').textContent=message;$('retryLoad').hidden=true;}
 function hideLoading(){$('loadingOverlay').hidden=true;}
 function loadingFailure(err){$('loadingDetail').textContent=err;$('retryLoad').hidden=false;status('error','Offline');}
-function getDraft(){try{const d=JSON.parse(storage.getItem(DRAFT_KEY)||storage.getItem(LEGACY_DRAFT_KEY)||'null');return d?.snapshot?.scene&&Array.isArray(d.operations)?d:null;}catch{return null;}}
-function storeDraft(){try{if(!pending.length){storage.removeItem(DRAFT_KEY);storage.removeItem(LEGACY_DRAFT_KEY);return;}storage.setItem(DRAFT_KEY,JSON.stringify({baseRevision:pendingRevision,operations:pending,snapshot:data,savedAt:new Date().toISOString()}));}catch{showError('Penyimpanan lokal diblokir','Browser tidak mengizinkan penyimpanan draft. Ekspor cadangan sebelum menutup tab.');}}
 function parseHostResponse(raw){const result=raw?.result??raw;if(result?.isError){const text=result.content?.find(x=>x.type==='text')?.text||'Perintah MCP gagal';let value;try{value=JSON.parse(text);}catch{}throw Object.assign(Error(value?.error||value?.message||text),{code:value?.code});}if(result?.structuredContent)return result.structuredContent;if(result?.content?.[0]?.text){try{return JSON.parse(result.content[0].text)}catch{}}return result;}
-function apiHeaders(){const h={'Content-Type':'application/json'};const t=hosted?null:session.getItem('osce-studio-token');if(t)h.Authorization='Bearer '+t;return h;}
-async function api(path,method='GET',payload){const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),12000);try{const res=await fetch(path,{method,headers:apiHeaders(),body:payload===undefined?undefined:JSON.stringify(payload),signal:ctrl.signal});const out=await res.json().catch(()=>({error:`HTTP ${res.status}`}));if(!res.ok)throw Object.assign(Error(out.error||`HTTP ${res.status}`),{code:out.code,status:res.status});return out;}catch(e){if(e.name==='AbortError')throw Object.assign(Error('Server tidak merespons (12 detik). Perubahan mungkin sudah diproses; sinkronkan sebelum mengulang.'),{code:'TIMEOUT'});throw e;}finally{clearTimeout(timer)}}
+function apiHeaders(){const h={'Content-Type':'application/json'};if(sessionId)h['X-Studio-Session']=sessionId;const t=hosted?null:session.getItem('osce-studio-token');if(t)h.Authorization='Bearer '+t;return h;}
+async function api(path,method='GET',payload){const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),12000);try{const res=await fetch(path,{method,headers:apiHeaders(),body:payload===undefined?undefined:JSON.stringify(payload),signal:ctrl.signal});const out=await res.json().catch(()=>({error:`HTTP ${res.status}`}));if(!res.ok)throw Object.assign(Error(out.error||`HTTP ${res.status}`),{code:out.code,status:res.status});return out;}catch(e){if(e.name==='AbortError')throw Object.assign(Error('Server tidak merespons (12 detik). Perubahan mungkin sudah diproses; periksa status sesi sebelum mengulang.'),{code:'TIMEOUT'});throw e;}finally{clearTimeout(timer)}}
 function hostRpc(method,params,timeout=7000){return new Promise((resolve,reject)=>{const id=++bridgeCounter;const timer=setTimeout(()=>{bridgePending.delete(id);reject(Error('Host MCP tidak merespons'))},timeout);bridgePending.set(id,{resolve,reject,timer});window.parent.postMessage({jsonrpc:'2.0',id,method,params},bridgeOrigin);});}
 window.addEventListener('message',event=>{
  if(!embedded||event.source!==window.parent||(bridgeOrigin!=='*'&&event.origin!==bridgeOrigin))return;
  const message=event.data;if(message?.jsonrpc!=='2.0')return;
- if(message.method==='ui/notifications/tool-result'&&message.params?.structuredContent?.scene&&renderer&&!pending.length&&!dragActive){
-   const next=message.params.structuredContent;
-   if(!data||next.scene.revision>data.scene.revision)applyData(next);
+ if(message.method==='ui/notifications/tool-result'){
+   const updated=message.params?.structuredContent;
+   if(!updated?.sessionId || !updated.scene)return;
+   if(!sessionId){initialWidgetState=updated;receiveInitial?.(updated);return;}
+   if(updated.sessionId!==sessionId || updated.scene.revision<=data.scene.revision)return;
+   if(!dragActive&&!inFlight)applyData(updated);
+   else{remoteDirty=true;remoteRevision=Math.max(remoteRevision,updated.scene.revision);}
    return;
  }
  if(message.id!==undefined&&['ui/resource-teardown','ping'].includes(message.method)){
@@ -48,19 +47,20 @@ window.addEventListener('message',event=>{
  const call=!message.method&&bridgePending.get(message.id);if(!call)return;
  clearTimeout(call.timer);bridgePending.delete(message.id);
  if(message.error)call.reject(Error(message.error.message||'MCP host error'));
- else{if(event.origin && event.origin!=='null')bridgeOrigin=event.origin;call.resolve(message.result);}
+ else{if(event.origin&&event.origin!=='null')bridgeOrigin=event.origin;call.resolve(message.result);}
 });
 async function initializeBridge(){
- if(!embedded || hostReady || previewHost)return;
+ if(!embedded||hostReady||previewHost)return;
  if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}
- try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.4.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
+ try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.6.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
  catch(err){if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}if(previewHost){hostKind='local-preview';hostReady=false;return;}throw Error('Koneksi host ChatGPT belum tersedia: '+err.message);}
 }
 async function tool(name,args={}){
  if(embedded&&!previewHost&&!hostReady)await initializeBridge();
- if(embedded&&hostReady){let r;if(window.openai?.callTool)r=await window.openai.callTool(name,args);else r=await hostRpc('tools/call',{name,arguments:args});return parseHostResponse(r);}
+ if(embedded&&hostReady){const argumentsWithSession=sessionId?{...args,sessionId}:args;let r;if(window.openai?.callTool)r=await window.openai.callTool(name,argumentsWithSession);else r=await hostRpc('tools/call',{name,arguments:argumentsWithSession});return parseHostResponse(r);}
  if(embedded&&!previewHost)throw Error('Widget belum terhubung dengan host MCP. Coba buka ulang dari ChatGPT.');
  switch(name){
+  case 'open_studio':return api('/api/session','POST',{});
   case 'get_world_state':return api('/api/state');
   case 'get_asset_catalog':{const d=await api('/api/state');return {assets:d.assets,behaviors:d.behaviors};}
   case 'apply_scene_operations':return api('/api/operations','POST',args);
@@ -70,17 +70,16 @@ async function tool(name,args={}){
   case 'validate_asset':return api('/api/validate-asset','POST',args.asset);
   case 'validate_behavior':return api('/api/validate-behavior','POST',args.behavior);
   case 'test_behavior':return api('/api/behavior-test','POST',args);
-  case 'save_scene':return api('/api/save','POST',{});
-  case 'undo_scene':return api('/api/undo','POST',{});
+    case 'undo_scene':return api('/api/undo','POST',{});
   case 'redo_scene':return api('/api/redo','POST',{});
   case 'get_execution_log':return api('/api/log');
   case 'reset_world':return api('/api/reset','POST',args);
   default:throw Error('Tool tidak didukung: '+name);
  }
 }
-function applyData(next){if(!renderer)throw Error('Renderer tidak tersedia');if(!next?.scene?.entities||!Array.isArray(next.assets))throw Error('Format scene dari server tidak lengkap');data=next;renderer.setWorld(data);
+function applyData(next){if(!renderer)throw Error('Renderer tidak tersedia');if(!next?.scene?.entities||!Array.isArray(next.assets))throw Error('Format scene dari server tidak lengkap');if(next.sessionId)sessionId=next.sessionId;data=next;renderer.setWorld(data);
  if(selected&&!data.scene.entities.some(e=>e.id===selected)){selected=null;selectedJoint=null;}
- renderer.setSelected(selected,selectedJoint);$('sceneTitle').textContent=data.scene.title;renderSelection();if(pane)renderPane();if(!pending.length)status('ok',`Tersinkron · r${data.scene.revision}`);}
+ renderer.setSelected(selected,selectedJoint);$('sceneTitle').textContent=data.scene.title;renderSelection();if(pane)renderPane();status('ok','Sesi sementara');}
 function setRendererStatus(kind,message){const indicator=$('rendererPill');if(kind==='ready'){frameReady=true;indicator.hidden=true;if(data)hideLoading();}
  else if(kind==='recovering'){indicator.hidden=false;indicator.textContent='Memulihkan 3D…';}
  else if(kind==='fallback'){frameReady=true;indicator.hidden=false;indicator.textContent='Mode gambar sederhana · '+message;if(data)hideLoading();}
@@ -106,7 +105,7 @@ const navTitles={add:['ADD TO WORLD','Tambah objek'],ask:['AI BUILDER','Ask Chat
 function renderPane(){if(!pane)return;
  if(!data){
    $('sheetEyebrow').textContent='KONEKSI';$('sheetTitle').textContent='Hubungkan studio';
-   $('sheetBody').innerHTML=`<p>${hosted?'Data scene belum tersedia. Coba sinkronkan ulang setelah masuk dengan ChatGPT.':'Data scene belum tersedia. Untuk server lokal dengan API_TOKEN, masukkan token yang sah.'}</p>${!embedded&&!hosted?`<label class="field"><span>Token server</span><input id="serverToken" type="password" autocomplete="off" placeholder="Bearer API_TOKEN"></label><button class="primary-button" data-ui="set-token">Hubungkan</button>`:''}<div class="row-actions"><button class="soft-button" data-ui="sync-now">Coba muat ulang</button></div><p class="hint">${esc(lastError||'Server offline atau host ChatGPT belum tersedia.')}</p>`;
+   $('sheetBody').innerHTML=`<p>${hosted?'Sesi belum dimulai. Coba buka sesi baru.':'Sesi belum dimulai. Jika server memakai API_TOKEN, isi token untuk memulai sesi sementara.'}</p>${!embedded&&!hosted?`<label class="field"><span>Token server</span><input id="serverToken" type="password" autocomplete="off" placeholder="Bearer API_TOKEN"></label><button class="primary-button" data-ui="set-token">Hubungkan</button>`:''}<div class="row-actions"><button class="soft-button" data-ui="sync-now">Mulai sesi baru</button></div><p class="hint">${esc(lastError||'Server offline atau host ChatGPT belum tersedia.')}</p>`;
    return;
  }
  const [eyebrow,title]=navTitles[pane]||['STUDIO','Panel'];$('sheetEyebrow').textContent=eyebrow;$('sheetTitle').textContent=title;let html='';
@@ -121,101 +120,145 @@ function renderPane(){if(!pane)return;
   html=`<p>Pilih kasus, lalu tandai tahap yang benar-benar sudah lu kerjakan. Sistem tidak memberikan skor teknik otomatis.</p><label class="field"><span>Skenario</span><select id="scenarioPicker">${data.templates.map(t=>`<option value="${esc(t.id)}" ${s.id===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}${s.generated?`<option value="custom" selected>${esc(s.name)} (custom)</option>`:''}</select></label><div class="status-desc">${esc(s.patient?.complaint||'Latihan umum')} · ${done} / ${total} tahap selesai</div><h3>Checklist latihan</h3>${s.steps.map((step,i)=>`<label class="step"><input type="checkbox" data-step="${i}" ${(s.completed||[]).includes(i)?'checked':''}><span>${esc(step)}</span></label>`).join('')}<p class="hint">${esc(s.note||'')}</p>`;
  }
  if(pane==='more'){
-  html=`<p>Kontrol penting dan pengaturan lanjutan disimpan di sini agar playground tetap bersih.</p><div class="row-actions"><button class="soft-button" data-ui="redo">${icon('redo')} Redo</button><button class="soft-button" data-ui="reset-camera">${icon('focus')} Reset kamera</button></div><div class="row-actions"><button class="soft-button" data-ui="export">${icon('download')} Ekspor proyek</button>${embedded&&!previewHost?'':'<button class="soft-button" data-ui="import">Impor proyek</button>'}</div><div class="section-divider"></div><div class="object-list"><button class="object-choice" data-open="objects">${icon('list')} <strong>Semua objek</strong>${icon('arrow')}</button><button class="object-choice" data-open="diagnostics">${icon('cloud')} <strong>Sinkronisasi & MCP</strong>${icon('arrow')}</button><button class="object-choice" data-open="advanced">${icon('box')} <strong>Editor data lanjutan</strong>${icon('arrow')}</button></div><div class="section-divider"></div><button class="danger-button" data-ui="reset-world">Reset scene ke awal</button>`;
+  html=`<p>Semuanya berlangsung di sesi ini saja. Saat studio ditutup atau dimuat ulang, dunia dimulai dari awal.</p><div class="row-actions"><button class="soft-button" data-ui="redo">${icon('redo')} Redo</button><button class="soft-button" data-ui="reset-camera">${icon('focus')} Reset kamera</button></div><div class="section-divider"></div><div class="object-list"><button class="object-choice" data-open="objects">${icon('list')} <strong>Semua objek</strong>${icon('arrow')}</button><button class="object-choice" data-open="diagnostics">${icon('cloud')} <strong>Koneksi ChatGPT</strong>${icon('arrow')}</button><button class="object-choice" data-open="advanced">${icon('box')} <strong>AI Asset Builder (lanjutan)</strong>${icon('arrow')}</button></div><div class="section-divider"></div><div class="row-actions"><button class="danger-button" data-ui="reset-world">Reset dunia sekarang</button></div>`;
  }
  if(pane==='objects')html=`<p>Pilih objek dari daftar jika sulit disentuh karena tertutup objek lain.</p><div class="object-list">${data.scene.entities.map(e=>`<button class="object-choice ${e.id===selected?'active':''}" data-entity="${esc(e.id)}">${icon(e.type==='character'?'hand':'box')} <strong>${esc(e.name)}</strong><span class="tag">${esc(e.type==='character'?e.role:e.assetId)}</span></button>`).join('')}</div><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
- if(pane==='diagnostics')html=`<div class="status-desc ${pending.length?'error':''}">${pending.length?`Ada ${pending.length} perubahan lokal yang belum disinkronkan.`:'Scene tersinkron atau sedang memeriksa koneksi.'}</div><h3>MCP / API</h3><div class="code-line" id="diagSummary">${embedded?(hostReady?'Host MCP terhubung ('+esc(hostKind)+')':'Host MCP belum terverifikasi'):'Alamat server: '+esc(location.origin+'/mcp')}</div><div class="row-actions"><button class="primary-button" data-ui="check-mcp">Uji MCP sekarang</button><button class="soft-button" data-ui="sync-now">Sinkronkan</button></div>${!embedded&&!hosted?`<label class="field"><span>Token server (hanya disimpan untuk tab ini)</span><input id="serverToken" type="password" autocomplete="off" value="${esc(session.getItem('osce-studio-token')||'')}" placeholder="Jika server meminta token"></label><button class="soft-button" data-ui="set-token">Simpan token sesi</button>`:''}<h3>Cadangan & pemulihan</h3><div class="row-actions"><button class="soft-button" data-ui="export">Ekspor data lokal</button>${pending.length?'<button class="danger-button" data-ui="discard-draft">Buang draft offline</button>':''}</div><h3>Riwayat</h3><div class="object-list" id="recentLog"><span class="hint">Pilih “Uji MCP sekarang” untuk status, atau lihat riwayat yang tersimpan di server.</span></div><button class="soft-button" data-ui="load-log">Muat riwayat</button><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
+ if(pane==='diagnostics'){
+  html=`<p>MCP mengubah scene sesi aktif, tanpa penyimpanan permanen dan tanpa polling. Gerakan jari berlangsung langsung di tablet.</p><div class="status-desc" id="diagSummary">Sesi: ${esc(sessionId||'Belum ada')} · ${esc(hostKind)}</div><div class="row-actions"><button class="soft-button" data-ui="check-mcp">Uji MCP</button><button class="soft-button" data-ui="load-log">Riwayat sesi</button></div><div id="recentLog"></div>${!embedded&&!hosted?`<label class="field"><span>Token server (jika diperlukan)</span><input type="password" id="serverToken" value="" autocomplete="off" placeholder="Bearer API_TOKEN"></label><div class="row-actions"><button class="soft-button" data-ui="set-token">Hubungkan sesi baru</button></div>`:''}<p class="hint">${hosted?'Menutup tab mengakhiri sesi bila permintaan penutupan terkirim. Sesi yang tertinggal kedaluwarsa setelah dua jam.':'Sesi dihapus dari memori server ketika permintaan penutupan diterima atau saat kedaluwarsa.'}</p>`;
+ }
  if(pane==='advanced'){
-  html=`<p>Untuk pengguna yang membutuhkan kendali penuh: definisi alat dan logika bekerja sungguhan setelah divalidasi server. Tidak ada eksekusi JavaScript buatan AI.</p><h3>Asset Factory</h3><label class="field"><span>Definisi aset JSON</span><textarea class="code" id="assetJSON" spellcheck="false">${esc(window.__assetDraft||JSON.stringify({id:'probe-custom',name:'Probe latihan',category:'Alat',parts:[{shape:'cylinder',position:[0,0,0],size:[.06,.32,.06],color:'#648bca'}],anchors:[{id:'grip',position:[0,0,0]}]},null,2))}</textarea></label><div class="row-actions"><button class="soft-button" data-ui="validate-asset">Periksa aset</button><button class="primary-button" data-ui="create-asset">Simpan aset</button></div><h3>Behavior Engine</h3><label class="field"><span>Definisi status & transisi JSON</span><textarea class="code" id="behaviorJSON" spellcheck="false">${esc(window.__behaviorDraft||JSON.stringify({id:'switch-custom',name:'Saklar latihan',states:['off','on'],initial:'off',transitions:[{from:'off',action:'on',to:'on',label:'Aktifkan'},{from:'on',action:'off',to:'off',label:'Matikan'}]},null,2))}</textarea></label><div class="row-actions"><button class="soft-button" data-ui="validate-behavior">Periksa perilaku</button><button class="primary-button" data-ui="create-behavior">Simpan perilaku</button></div><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
+  html=`<p>Untuk pengguna yang membutuhkan kendali penuh: definisi alat dan logika bekerja sungguhan setelah divalidasi server. Tidak ada eksekusi JavaScript buatan AI.</p><h3>Asset Factory</h3><label class="field"><span>Definisi aset JSON</span><textarea class="code" id="assetJSON" spellcheck="false">${esc(window.__assetDraft||JSON.stringify({id:'probe-custom',name:'Probe latihan',category:'Alat',parts:[{shape:'cylinder',position:[0,0,0],size:[.06,.32,.06],color:'#648bca'}],anchors:[{id:'grip',position:[0,0,0]}]},null,2))}</textarea></label><div class="row-actions"><button class="soft-button" data-ui="validate-asset">Periksa aset</button><button class="primary-button" data-ui="create-asset">Buat aset</button></div><h3>Behavior Engine</h3><label class="field"><span>Definisi status & transisi JSON</span><textarea class="code" id="behaviorJSON" spellcheck="false">${esc(window.__behaviorDraft||JSON.stringify({id:'switch-custom',name:'Saklar latihan',states:['off','on'],initial:'off',transitions:[{from:'off',action:'on',to:'on',label:'Aktifkan'},{from:'on',action:'off',to:'off',label:'Matikan'}]},null,2))}</textarea></label><div class="row-actions"><button class="soft-button" data-ui="validate-behavior">Periksa perilaku</button><button class="primary-button" data-ui="create-behavior">Buat perilaku</button></div><div class="row-actions"><button class="soft-button" data-open="more">Kembali</button></div>`;
  }
  $('sheetBody').innerHTML=html;
 }
-function offlineEligible(ops){
- if(!ops.length||ops.length>12)return false;
- if(ops.length===1)return ['set_joint','move_entity','rotate_entity'].includes(ops[0].type);
- return ops.every(op=>op.type==='set_joint'&&op.entityId===ops[0].entityId);
+// The renderer and IK mutate the in-memory world immediately. Only a *finished*
+// gesture produces an intent operation for the MCP session world. No per-frame
+// requests, no autosave, no periodic polling, no persistent drafts.
+async function updateScene(operations,{gesture=false,expectedSession}={}){
+ if(expectedSession!==sessionId)return;
+ if(!data)throw Error('Sesi belum dimulai');
+ inFlight++;
+ const baseRevision=data.scene.revision;
+ try{
+  const result=await tool('apply_scene_operations',{operations,baseRevision});
+  if(expectedSession!==sessionId)return result;
+  data.scene.revision=result.revision;
+  if(!gesture){await reload({force:true,quiet:true});}
+  if(gesture)status('ok','Sesi sementara');
+  clearError();return result;
+ }catch(err){
+  if(expectedSession!==sessionId)return;
+  showError('Perubahan tidak diterima server',err.message+' · Perubahan di perangkat ditampilkan dahulu, lalu akan dipulihkan dari sesi server.');
+  await reload({force:true,quiet:true}).catch(()=>{});
+  throw err;
+ }finally{inFlight--;if(expectedSession===sessionId&&remoteDirty&&!dragActive&&inFlight===0){remoteDirty=false;const needed=remoteRevision>(data?.scene?.revision||0);remoteRevision=0;if(needed)reload({force:true,quiet:true}).catch(()=>{});}}
 }
-function appendOffline(ops,baseRevision){
- if(pendingRevision===null)pendingRevision=baseRevision;
- // Last-write-wins coalescing keeps lengthy stop-motion sessions under the server's 50-op transaction limit.
- const combined=new Map();
- for(const op of [...pending,...ops]){
-  const k=op.type==='set_joint'?`joint:${op.entityId}:${op.joint}:${op.axis}`:`${op.type}:${op.entityId}`;
-  combined.set(k,op);
- }
- if(combined.size>50)throw Error('Draft terlalu besar. Hubungkan kembali atau ekspor proyek sebelum melanjutkan.');
- pending=[...combined.values()];storeDraft();status('error',`Offline · ${pending.length} perubahan`);
-}
-async function updateScene(operations,options={}){
- if(!data)throw Error('Scene belum dimuat');
- if(pending.length){if(offlineEligible(operations)){appendOffline(operations,pendingRevision);return {queued:true};}throw Error('Masih ada perubahan offline. Sinkronkan terlebih dahulu sebelum menambah objek.');}
- const baseRevision=options.baseRevision??data.scene.revision;inFlight++;status('pending','Menyimpan…');
- try{const result=await tool('apply_scene_operations',{operations,baseRevision});await reload({force:true});clearError();status('ok',`Tersinkron · r${data.scene.revision}`);return result;}
- catch(err){
-  if((err.code==='TIMEOUT'||err.name==='TypeError'||/fetch|network|Failed to fetch/i.test(err.message))&&offlineEligible(operations)){
-   appendOffline(operations,baseRevision);showError('Belum tersinkron','Perubahan pose tersimpan sebagai draft lokal. Sinkronkan sebelum menutup atau memuat ulang.');return {queued:true};
-  }
-  if(!pending.length)await reload({force:true,quiet:true}).catch(()=>{});
-  status('error','Perlu diperiksa');showError(err.code==='REVISION_CONFLICT'?'Scene berubah di tempat lain':'Perubahan gagal',err.message);throw err;
- }finally{inFlight--;}
-}
-function mutate(ops,options){const task=queue.then(()=>updateScene(ops,options));queue=task.catch(()=>{});return task;}
+function mutate(operations,options={}){const expectedSession=sessionId;const task=queue.then(()=>updateScene(operations,{...options,expectedSession}));queue=task.catch(()=>{});return task;}
 async function reload({quiet=false,force=false}={}){
- if(refreshLock){if(!force)return;while(refreshLock)await new Promise(resolve=>setTimeout(resolve,25));}
- if((inFlight>0||dragActive)&&!force)return;
- refreshLock=true;try{
-  const latest=await tool('get_world_state');
-  if(dragActive)return;
-  if(pending.length){if(latest.scene.revision!==pendingRevision){status('error','Konflik perubahan');showError('Perubahan bersamaan','Scene server sudah berubah sejak draft dibuat. Ekspor draft sebelum memutuskan pemulihan; sistem tidak akan menimpa data orang lain.');return;}
-    const result=await tool('apply_scene_operations',{baseRevision:pendingRevision,operations:pending});if(!result.ok)throw Error(result.error||'Sinkronisasi draft gagal');pending=[];pendingRevision=null;storeDraft();const committed=await tool('get_world_state');applyData(committed);
-  }else if(force||!quiet||!data||latest.scene.revision!==data.scene.revision)applyData(latest);
-  else status('ok',`Tersinkron · r${data.scene.revision}`);
-  if(!frameReady){$('loadingDetail').textContent='Menyiapkan 3D…';setTimeout(()=>{if(!frameReady&&data){$('loadingDetail').textContent='GPU sedang menyiapkan tampilan…';}},600);}
-  else hideLoading();if(!quiet)clearError();
- }catch(err){status('error',pending.length?'Draft belum sinkron':'Offline');if(!quiet){showError('Tidak dapat membaca scene',err.message);if(!data)loadingFailure(err.message);}throw err;}finally{refreshLock=false;}
+ if(refreshLock)return;
+ if((inFlight>0||dragActive)&&!force){remoteDirty=true;return;}
+ refreshLock=true;
+ const expectedSession=sessionId;
+ try{const latest=await tool('get_world_state');if(expectedSession!==sessionId)return;if(!dragActive){applyData(latest);if(frameReady)hideLoading();}else remoteDirty=true;if(!quiet)clearError();}
+ catch(err){if(!quiet){showError('Sesi belum tersedia',err.message);if(!data)loadingFailure(err.message);}throw err;}
+ finally{refreshLock=false;}
 }
-async function performTool(name,args={},success){inFlight++;status('pending','Memproses…');try{const result=await tool(name,args);if(name!=='get_execution_log'&&name!=='validate_asset'&&name!=='validate_behavior'&&name!=='test_behavior')await reload({force:true,quiet:true});if(success)notice(success);if(!pending.length)status('ok',`Tersinkron · r${data.scene.revision}`);return result;}catch(err){status('error','Perlu diperiksa');showError('Operasi gagal',err.message);throw err;}finally{inFlight--;}}
+async function performTool(name,args={},success){inFlight++;try{
+ const result=await tool(name,args);
+ if(!['get_execution_log','validate_asset','validate_behavior','test_behavior'].includes(name))await reload({force:true,quiet:true});
+ if(success)notice(success);status('ok','Sesi sementara');return result;
+ }catch(err){showError('Operasi gagal',err.message);throw err;}finally{inFlight--;}}
+function listenSessionEvents(){
+ if(embedded||!sessionId||eventAbort)return;
+ const controller=new AbortController();eventAbort=controller;const activeSession=sessionId;
+ (async()=>{
+  let retry=0;
+  while(!controller.signal.aborted&&sessionId===activeSession){
+   try{
+    const path=hosted?'/api/events?since='+encodeURIComponent(data?.scene.revision??0):'/api/events';
+    const response=await fetch(path,{headers:apiHeaders(),signal:controller.signal});
+    if(response.status===410){showError('Sesi berakhir','Buka sesi baru untuk melanjutkan.');status('error','Sesi berakhir');break;}
+    if(!response.ok||!response.body)throw Error('Aliran perubahan ChatGPT tidak tersedia');
+    if(retry){retry=0;await reload({quiet:true}).catch(()=>{});notice('Koneksi perubahan ChatGPT pulih');}
+    const reader=response.body.getReader(),decoder=new TextDecoder();let chunk='';
+    while(!controller.signal.aborted){
+     const {value,done}=await reader.read();if(done)break;chunk+=decoder.decode(value,{stream:true});
+     const blocks=chunk.split('\n\n');chunk=blocks.pop()||'';
+     for(const block of blocks){
+      if(block.includes('event: session_expired')){showError('Sesi berakhir','Buka sesi baru untuk melanjutkan.');status('error','Sesi berakhir');controller.abort();break;}
+      if(!block.includes('event: scene_updated'))continue;
+      const line=block.split('\n').find(x=>x.startsWith('data: '));if(!line)continue;
+      let evt;try{evt=JSON.parse(line.slice(6))}catch{continue}
+      if(evt.revision>(data?.scene?.revision||0)){
+       if(dragActive||inFlight>0){remoteDirty=true;remoteRevision=Math.max(remoteRevision,evt.revision);}
+       else await reload({quiet:true});
+      }
+     }
+    }
+    if(!controller.signal.aborted&&!hosted)throw Error('Aliran perubahan terputus');
+   }catch(err){
+    if(controller.signal.aborted)break;
+    if(!retry&&data)notice('Koneksi perubahan ChatGPT terputus; mencoba ulang',true);
+    retry++;
+    await new Promise(resolve=>setTimeout(resolve,Math.min(1200*2**Math.min(retry,4),12000)));
+   }
+  }
+ })();
+}
+async function startFreshSession({useHostResult=false}={}){
+ eventAbort?.abort();eventAbort=null;
+ sessionId=null;remoteDirty=false;remoteRevision=0;
+ if(embedded&&!previewHost){
+   await initializeBridge();
+   let initial=useHostResult ? window.openai?.toolOutput || initialWidgetState : null;
+   if(useHostResult&&!initial&&hostKind==='mcp-app'){
+     initial=await new Promise(resolve=>{
+       const timer=setTimeout(()=>{receiveInitial=null;resolve(null);},1200);
+       receiveInitial=value=>{clearTimeout(timer);receiveInitial=null;resolve(value);};
+     });
+   }
+   const state=(initial?.sessionId&&initial?.scene) ? initial : await tool('open_studio');
+   applyData(state);
+   return;
+ }
+ const start=await api('/api/session','POST',{});applyData(start);listenSessionEvents();
+}
 function safeID(prefix){return prefix+'-'+(globalThis.crypto?.randomUUID?.().slice(0,8)||Math.random().toString(36).slice(2,10));}
 function spawnPosition(furniture){const offset=(data?.scene.entities.length||0)%6;return furniture?[0.6+offset*.22,0,-.7+offset*.21]:[0.35+offset*.19,.82,.4+offset*.14];}
 async function execute(kind,payload){const e=currentEntity();try{
  switch(kind){
   case 'spawn-character':{const role=payload;const id=safeID('human');await mutate([{type:'spawn_character',id,role,name:role==='doctor'?'Dokter baru':'Pasien baru',position:role==='doctor'?[-1.7,0,1.3]:[1.1,0,1.3]}]);choose(id);stopPane();notice('Boneka ditambahkan');break;}
   case 'spawn-asset':{const a=data.assets.find(x=>x.id===payload);if(!a)throw Error('Aset tidak ada dalam katalog');const id=safeID('object');await mutate([{type:'spawn_asset',id,assetId:a.id,position:spawnPosition(a.category==='Furnitur')}]);choose(id);stopPane();notice(a.name+' ditambahkan');break;}
-  case 'joint-reset':if(e&&selectedJoint)await mutate([{type:'set_joint',entityId:e.id,joint:selectedJoint,axis,angle:0}]);break;
   case 'pose-standing':case 'pose-sitting':if(e)await mutate([{type:'apply_pose',entityId:e.id,presetId:kind.replace('pose-','')}]);break;
   case 'rotate-left':case 'rotate-right':if(e){const step=kind==='rotate-left'?-Math.PI/6:Math.PI/6;await mutate([{type:'rotate_entity',entityId:e.id,rotation:[e.rotation?.[0]||0,Math.atan2(Math.sin((e.rotation?.[1]||0)+step),Math.cos((e.rotation?.[1]||0)+step)),e.rotation?.[2]||0]}]);}break;
   case 'attach-doctor':case 'attach-patient':if(e)await mutate([{type:'attach',entityId:e.id,targetId:kind.replace('attach-',''),anchor:'rightHand'}]);break;
   case 'detach':if(e)await mutate([{type:'detach',entityId:e.id}]);break;
   case 'duplicate':if(e?.type==='asset'){const id=safeID('copy');await mutate([{type:'spawn_asset',id,assetId:e.assetId,position:[e.position[0]+.25,e.position[1],e.position[2]+.25],rotation:e.rotation}]);choose(id);}break;
   case 'delete':if(e&&confirm('Hapus '+e.name+' dari scene?')){await mutate([{type:'delete_entity',entityId:e.id}]);choose(null);}break;
-  case 'save':{const r=await performTool('save_scene',{},null);if(!r.stored)throw Error('Server tidak memiliki penyimpanan permanen');notice('Scene disimpan di server');break;}
-  case 'undo':await performTool('undo_scene',{},'Undo selesai');break;
+    case 'undo':await performTool('undo_scene',{},'Undo selesai');break;
   case 'redo':await performTool('redo_scene',{},'Redo selesai');break;
   case 'reset-camera':renderer.resetCamera();notice('Kamera kembali ke posisi awal');break;
-  case 'export':download('osce-playground-r'+data.scene.revision+'.json',JSON.stringify(data,null,2));notice('Cadangan diunduh');break;
-  case 'import':$('importFile').click();break;
-  case 'reset-world':if(confirm('Reset seluruh scene ke kondisi awal? Ini mengubah proyek tersimpan.')){await performTool('reset_world',{confirmed:true},'Scene dikembalikan ke awal');stopPane();}break;
+      case 'reset-world':if(confirm('Mulai sesi kosong dari awal? Semua perubahan sesi ini akan hilang.')){eventAbort?.abort();eventAbort=null;if(embedded){sessionId=null;await startFreshSession();}else{if(sessionId)await fetch('/api/session',{method:'DELETE',headers:apiHeaders()}).catch(()=>{});sessionId=null;await startFreshSession();}choose(null);stopPane();notice('Sesi baru dimulai');}break;
   case 'check-mcp':{
     const summary=$('diagSummary');
     if(embedded&&!previewHost){
-      const scene=await tool('get_world_state');
-      if(summary)summary.textContent=`Host ${hostKind} terhubung · revisi ${scene.scene.revision}.`;
+      const world=await tool('get_world_state');
+      if(summary)summary.textContent=`Host ${hostKind} terhubung · revisi ${world.scene.revision}.`;
     }else{
       const count=hosted?(await api('/api/connection')).toolCount:(await api('/mcp','POST',{jsonrpc:'2.0',id:1,method:'tools/list',params:{}})).result?.tools?.length;
       if(!count)throw Error('Katalog MCP tidak tersedia');
-      if(summary)summary.textContent=`Server MCP menyediakan ${count} tool · /mcp`;
+      if(summary)summary.textContent=`Server MCP menyediakan ${count} tool.`;
     }
     notice('Pemeriksaan MCP berhasil');break;
   }
-  case 'sync-now':await reload({force:true});notice('Sinkronisasi diperiksa');break;
-  case 'set-token':session.setItem('osce-studio-token',$('serverToken').value.trim());await reload({force:true});if(data)stopPane();notice('Token sesi diperbarui');break;
-  case 'discard-draft':if(confirm('Buang perubahan lokal yang belum terkirim?')){pending=[];pendingRevision=null;storeDraft();await reload({force:true});clearError();}break;
+  case 'sync-now':await startFreshSession();notice('Sesi baru dimulai');break;
+  case 'set-token':session.setItem('osce-studio-token',$('serverToken').value.trim());eventAbort?.abort();eventAbort=null;sessionId=null;await startFreshSession();if(data)stopPane();notice('Sesi baru terhubung');break;
   case 'load-log':{const logs=await tool('get_execution_log');const array=Array.isArray(logs)?logs:logs.result||[];const holder=$('recentLog');if(holder)holder.innerHTML=array.slice(0,12).map(l=>`<div class="status-desc">${esc(l.label)} · r${esc(l.revision)}<br><span class="meta">${esc(l.at)}</span></div>`).join('')||'<p>Belum ada riwayat.</p>';break;}
-  case 'validate-asset':case 'create-asset':{const raw=$('assetJSON').value;window.__assetDraft=raw;const a=JSON.parse(raw);const r=await performTool(kind==='create-asset'?'create_asset':'validate_asset',kind==='create-asset'?a:{asset:a});notice(kind==='create-asset'?'Aset tersedia di katalog':'Aset valid: '+r.partCount+' bagian');break;}
-  case 'validate-behavior':case 'create-behavior':{const raw=$('behaviorJSON').value;window.__behaviorDraft=raw;const b=JSON.parse(raw);const r=await performTool(kind==='create-behavior'?'create_behavior':'validate_behavior',kind==='create-behavior'?b:{behavior:b});notice(kind==='create-behavior'?'Perilaku disimpan':'Perilaku valid: '+r.transitionCount+' transisi');break;}
+  case 'validate-asset':case 'create-asset':{const raw=$('assetJSON').value;window.__assetDraft=raw;const a=JSON.parse(raw);const r=await performTool(kind==='create-asset'?'create_asset':'validate_asset',kind==='create-asset'?a:{asset:a});notice(kind==='create-asset'?'Aset baru siap dipakai di sesi ini':'Aset valid: '+r.partCount+' bagian');break;}
+  case 'validate-behavior':case 'create-behavior':{const raw=$('behaviorJSON').value;window.__behaviorDraft=raw;const b=JSON.parse(raw);const r=await performTool(kind==='create-behavior'?'create_behavior':'validate_behavior',kind==='create-behavior'?b:{behavior:b});notice(kind==='create-behavior'?'Perilaku siap di sesi ini':'Perilaku valid: '+r.transitionCount+' transisi');break;}
   case 'send-chat':case 'copy-chat':case 'open-chat':{
     const prompt=$('aiPrompt')?.value.trim()||'';if(!prompt)throw Error('Tulis instruksi terlebih dahulu');window.__lastPrompt=prompt;
-    const full=prompt+'\n\n'+DEFAULT_COMMAND;
+    const full=prompt+'\n\n'+DEFAULT_COMMAND+'\n\nSesi aktif: '+(sessionId||'belum tersedia')+'. Untuk mengedit scene yang sama, sertakan sessionId pada setiap tool MCP.';
     if(kind==='send-chat'){
       if(window.openai?.sendFollowUpMessage)await window.openai.sendFollowUpMessage({prompt:full});
       else if(hostReady)await hostRpc('ui/message',{role:'user',content:[{type:'text',text:full}]});
@@ -234,12 +277,12 @@ function download(name,text){const blob=new Blob([text],{type:'application/json'
 try{renderer=createRenderer($('scene3d'),$('hotspots'),{
  onRendererStatus:setRendererStatus,onRendererError:e=>showError('Renderer bermasalah',e.message),
  onSelect(id,joint){choose(id,joint);},
- onPreviewPose(id,joint,pose,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MENGATUR POSE · '+friendlyJoint(joint);if(g?.ikError>24)$('interactionHint').textContent='Batas jangkauan tercapai · putar kamera atau tarik lebih dekat';}},
- onPreviewPosition(id,p){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');}},
+ onPreviewPose(id,joint,pose,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MENGATUR POSE · '+friendlyJoint(joint);if(g?.reachLimit||g?.ikError>.12)$('interactionHint').textContent='Batas jangkauan sendi · tarik target lebih dekat';}},
+ onPreviewPosition(id,p,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');if(g?.snap)$('interactionHint').textContent='Lepas untuk menaruh alat di '+g.snap.supportName;if(g?.seat)$('interactionHint').textContent='Lepas untuk mendudukkan pasien di kursi';}},
  onGesture(phase,hit){if(phase==='start'){if(hit){selectionExpanded=false;renderSelection();}dragActive=!!hit;document.body.classList.toggle('puppet-dragging',!!hit);const attached=hit&&data?.scene?.entities.find(e=>e.id===hit.entityId)?.attachedTo;$('interactionHint').textContent=attached?'Objek terpasang · buka tindakan objek untuk melepas':hit?.kind==='pose'?'Tarik tangan/kaki · Lepas untuk membekukan':hit?'Geser objek · Lepas untuk menyimpan':'Geser ruang kosong untuk memutar kamera';}
-  if(phase==='camera'){$('interactionHint').textContent='Dua jari: zoom dan geser kamera';dragActive=true;}
-  if(phase==='end'||phase==='cancel'){dragActive=false;document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
- onCommitOperations(operations,baseRevision){mutate(operations,{baseRevision}).catch(()=>{});}
+  if(phase==='camera'){$('interactionHint').textContent='Pose tetap · dua jari untuk zoom dan geser kamera';dragActive=true;}
+  if(phase==='end'||phase==='cancel'){dragActive=false;setTimeout(()=>{if(remoteDirty&&!dragActive&&!inFlight&&remoteRevision>(data?.scene?.revision||0)){remoteDirty=false;remoteRevision=0;reload({quiet:true}).catch(()=>{});}},80);document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
+ onCommitOperations(operations){mutate(operations,{gesture:true}).catch(()=>{});}
 
 });}catch(err){showError('Grafis tidak dapat dimulai',err.message);loadingFailure(err.message);}
 
@@ -253,9 +296,8 @@ $('selectionExpand').addEventListener('click',()=>{selectionExpanded=!selectionE
 $('resetCamera').addEventListener('click',()=>execute('reset-camera'));
 $('focusBtn').addEventListener('click',()=>{if(selected)renderer.focusEntity(selected)});
 $('undoBtn').addEventListener('click',()=>execute('undo'));
-$('saveBtn').addEventListener('click',()=>execute('save'));
 $('errorDismiss').addEventListener('click',clearError);
-$('retryLoad').addEventListener('click',()=>{showLoading('Menghubungkan ulang…');reload({force:true}).catch(()=>{});});
+$('retryLoad').addEventListener('click',()=>{showLoading('Mencoba membuat sesi baru…');startFreshSession().catch(err=>loadingFailure(err.message));});
 $('sheetBody').addEventListener('click',async event=>{
  const b=event.target.closest('button');if(!b)return;
  if(b.dataset.open){openPane(b.dataset.open);return;}
@@ -276,33 +318,26 @@ $('selectionBody').addEventListener('click',async event=>{
  if(b.dataset.action&&currentEntity())await mutate([{type:'trigger_action',entityId:selected,action:b.dataset.action}]).catch(()=>{});
  if(b.dataset.operation)await execute(b.dataset.operation);
 });
-$('selectionBody').addEventListener('change',async event=>{
- const b=event.target;if(!currentEntity())return;
-
-});
-$('selectionBody').addEventListener('input',event=>{
- const b=event.target;if(!data||!currentEntity())return;
-
-});
-$('importFile').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{if(file.size>1_500_000)throw Error('File terlalu besar (maksimal 1,5 MB)');const parsed=JSON.parse(await file.text());if(!confirm('Timpa scene saat ini dengan file ini?'))return;if(embedded)throw Error('Impor snapshot hanya tersedia lewat situs mandiri karena tool restore belum dipublikasikan pada host.');await api('/api/restore','POST',{snapshot:parsed,baseRevision:data.scene.revision});await reload({force:true});notice('Scene dipulihkan dari file');}catch(err){showError('Impor gagal',err.message);}finally{event.target.value='';}});
 document.addEventListener('keydown',event=>{const inField=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(event.key==='Escape'){if(pane)stopPane();else choose(null);}if(!inField&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();execute(event.shiftKey?'redo':'undo');}});
-window.addEventListener('online',()=>reload({quiet:true,force:true}).catch(()=>{}));
+window.addEventListener('online',()=>{if(remoteDirty)reload({quiet:true}).catch(()=>{});});
 window.addEventListener('unhandledrejection',event=>{showError('Proses gagal',event.reason?.message||'Permintaan tidak selesai.');});
 
 async function boot(){
- showLoading();draft=getDraft();
- if(draft){pending=draft.operations;pendingRevision=draft.baseRevision;if(draft.snapshot){try{applyData(draft.snapshot);status('error',`Draft lokal · ${pending.length}`);}catch{}}}
- try{
-  await initializeBridge();
-  const initial=window.openai?.toolOutput?.scene?window.openai.toolOutput:null;
-  if(initial&&!data)applyData(initial);
-  await reload({force:true});
-  if(frameReady)hideLoading();
- }catch(err){if(!data)loadingFailure(err.message);showError('Studio belum terhubung',err.message);}
- // Poll only while visible, in the absence of local unsaved activity. The MCP host may not expose SSE.
- setInterval(()=>{if(document.hidden||inFlight||refreshLock||embedded&&!hostReady&&!previewHost)return;reload({quiet:true}).catch(()=>{});},5000);
+ showLoading('Menyiapkan dunia sementara…');
+ try{await startFreshSession({useHostResult:true});if(frameReady)hideLoading();}
+ catch(err){if(!data)loadingFailure(err.message);showError('Studio belum terhubung',err.message);}
 }
 boot();
+// Best-effort deletion. A crashed tab may leave RAM behind until TTL eviction;
+// no scene survives a new visit because a new session ID is always generated.
+// Back/forward cache can resurrect a page after pagehide despite the deleted session.
+// A restored document must always create a fresh world.
+window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
+window.addEventListener('pagehide',()=>{
+ if(sessionClosed||embedded||!sessionId)return;sessionClosed=true;
+ eventAbort?.abort();
+ fetch('/api/session',{method:'DELETE',headers:apiHeaders(),keepalive:true}).catch(()=>{});
+});
 
 if(!hosted && !embedded && 'serviceWorker' in navigator && (location.protocol==='https:' || ['127.0.0.1','localhost'].includes(location.hostname))){
  window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(error=>{console.warn('PWA cache unavailable:',error.message)}));

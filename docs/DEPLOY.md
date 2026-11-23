@@ -4,8 +4,11 @@ This repository contains one complete Node.js 22 server that serves (1) tablet-f
 
 ## ChatGPT Sites
 
-Build with `npm run build:sites`. The private Site uses ChatGPT sign-in, the existing `STUDIO` R2 binding, and the same per-account storage key for the web editor and MCP. Publish with the existing `.openai/hosting.json` project ID. Saved v0.2 projects can be read in place. The Node deployment instructions below use file storage and bearer tokens instead.
+Build with `npm run build:sites` and publish using the existing project ID in `.openai/hosting.json`. Sites authenticates the caller for both the editor and MCP. v0.6 uses the existing `STUDIO` R2 binding for short-lived state shared across worker instances. A new editor visit or `open_studio` without an ID starts at revision 0. To share a session, send its ID to MCP under the same account.
 
+The Site rejects sessions two hours after creation. A successful tab-close request deletes the session immediately. Opening fresh sessions also cleans up expired entries, including entries left by disconnected tabs and ChatGPT widgets. The v0.4 `projects/` records are never accessed by the v0.6 session store.
+
+The separate Node deployment uses RAM-only sessions. Its file-backed Studio API remains available for local development and tests, but the v0.6 server does not use it for sessions.
 
 ## Option A: Render Blueprint — HTTPS & persistent volume
 

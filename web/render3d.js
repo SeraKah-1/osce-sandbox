@@ -25,14 +25,38 @@ const strColor=(hex)=>[parseInt(hex.slice(1,3),16)/255,parseInt(hex.slice(3,5),1
 function perspective(fov,aspect,near,far){const f=1/Math.tan(fov/2),nf=1/(near-far);return [f/aspect,0,0,0,0,f,0,0,0,0,(far+near)*nf,-1,0,0,2*far*near*nf,0];}
 function lookAt(eye,target,up=[0,1,0]){const z=norm(sub(eye,target)),x=norm(cross(up,z)),y=cross(z,x);return [x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-dot(x,eye),-dot(y,eye),-dot(z,eye),1];}
 function cuboid(){const vertices=[],indices=[];const faces=[[[0,0,1],[[-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]]],[[0,0,-1],[[.5,-.5,-.5],[-.5,-.5,-.5],[-.5,.5,-.5],[.5,.5,-.5]]],[[1,0,0],[[.5,-.5,.5],[.5,-.5,-.5],[.5,.5,-.5],[.5,.5,.5]]],[[-1,0,0],[[-.5,-.5,-.5],[-.5,-.5,.5],[-.5,.5,.5],[-.5,.5,-.5]]],[[0,1,0],[[-.5,.5,.5],[.5,.5,.5],[.5,.5,-.5],[-.5,.5,-.5]]],[[0,-1,0],[[-.5,-.5,-.5],[.5,-.5,-.5],[.5,-.5,.5],[-.5,-.5,.5]]]];for(const [n,quad] of faces){const base=vertices.length/6;for(const p of quad)vertices.push(...p,...n);indices.push(base,base+1,base+2,base,base+2,base+3)}return {vertices,indices};}
-function sphere(lat=10,lon=16){const v=[],idx=[];for(let y=0;y<=lat;y++){const th=y*Math.PI/lat;for(let x=0;x<=lon;x++){const ph=x*2*Math.PI/lon,n=[Math.sin(th)*Math.cos(ph),Math.cos(th),Math.sin(th)*Math.sin(ph)];v.push(...n,...n);}}for(let y=0;y<lat;y++)for(let x=0;x<lon;x++){const a=y*(lon+1)+x,b=a+lon+1;idx.push(a,b,a+1,b,b+1,a+1)}return {vertices:v,indices:idx};}
-function cylinder(N=14){const v=[],idx=[];for(let i=0;i<=N;i++){const a=2*Math.PI*i/N,x=Math.cos(a),z=Math.sin(a);v.push(x,-.5,z,x,0,z,x,.5,z,x,0,z);}for(let i=0;i<N;i++){const j=i*2;idx.push(j,j+1,j+2,j+1,j+3,j+2);}for(const y of [-.5,.5]){const b=v.length/6;v.push(0,y,0,0,Math.sign(y),0);for(let i=0;i<=N;i++){const a=2*Math.PI*i/N;v.push(Math.cos(a),y,Math.sin(a),0,Math.sign(y),0);}for(let i=0;i<N;i++){if(y>0)idx.push(b,b+i+1,b+i+2);else idx.push(b,b+i+2,b+i+1);}}return {vertices:v,indices:idx};}
+function sphere(lat=28,lon=44){const v=[],idx=[];for(let y=0;y<=lat;y++){const th=y*Math.PI/lat;for(let x=0;x<=lon;x++){const ph=x*2*Math.PI/lon,n=[Math.sin(th)*Math.cos(ph),Math.cos(th),Math.sin(th)*Math.sin(ph)];v.push(...n,...n);}}for(let y=0;y<lat;y++)for(let x=0;x<lon;x++){const a=y*(lon+1)+x,b=a+lon+1;idx.push(a,b,a+1,b,b+1,a+1)}return {vertices:v,indices:idx};}
+function cylinder(N=24){const v=[],idx=[];for(let i=0;i<=N;i++){const a=2*Math.PI*i/N,x=Math.cos(a),z=Math.sin(a);v.push(x,-.5,z,x,0,z,x,.5,z,x,0,z);}for(let i=0;i<N;i++){const j=i*2;idx.push(j,j+1,j+2,j+1,j+3,j+2);}for(const y of [-.5,.5]){const b=v.length/6;v.push(0,y,0,0,Math.sign(y),0);for(let i=0;i<=N;i++){const a=2*Math.PI*i/N;v.push(Math.cos(a),y,Math.sin(a),0,Math.sign(y),0);}for(let i=0;i<N;i++){if(y>0)idx.push(b,b+i+1,b+i+2);else idx.push(b,b+i+2,b+i+1);}}return {vertices:v,indices:idx};}
+// One continuous high-resolution capsule surface per body segment. Flat-ended
+// cylinders made joints look mechanical and showed seams while posing.
+export function capsule(rings=14,sides=40){
+ const rows=[],v=[],idx=[];
+ for(let i=0;i<=rings;i++){
+  const theta=-Math.PI/2+(Math.PI/2)*(i/rings);
+  rows.push({y:-.32+.18*Math.sin(theta),radius:Math.cos(theta),ny:Math.sin(theta)});
+ }
+ rows.push({y:.32,radius:1,ny:0});
+ for(let i=1;i<=rings;i++){
+  const theta=(Math.PI/2)*(i/rings);
+  rows.push({y:.32+.18*Math.sin(theta),radius:Math.cos(theta),ny:Math.sin(theta)});
+ }
+ for(const ring of rows)for(let j=0;j<=sides;j++){
+  const angle=j*Math.PI*2/sides,c=Math.cos(angle),s=Math.sin(angle);
+  const n=Math.hypot(ring.radius,ring.ny)||1;
+  v.push(ring.radius*c,ring.y,ring.radius*s,ring.radius*c/n,ring.ny/n,ring.radius*s/n);
+ }
+ for(let i=0;i<rows.length-1;i++)for(let j=0;j<sides;j++){
+  const a=i*(sides+1)+j,b=a+sides+1;
+  idx.push(a,b,a+1,b,b+1,a+1);
+ }
+ return {vertices:v,indices:idx};
+}
 function between(a,b,r){const direction=norm(sub(b,a)),axis=Math.abs(direction[2])>.92?[0,1,0]:[0,0,1];const right=norm(cross(axis,direction)),forward=norm(cross(direction,right));const center=mulv(add(a,b),.5),h=length(sub(b,a));return [right[0]*r,right[1]*r,right[2]*r,0,direction[0]*h,direction[1]*h,direction[2]*h,0,forward[0]*r,forward[1]*r,forward[2]*r,0,...center,1];}
 export function characterSkeleton(e){
  const pose=e.pose||{}, root=chain(translate(...e.position),rotY(e.rotation?.[1]||0));const hip=pt(root,[0,.95,0]);
  const spine=chain(root,translate(0,.95,0),rotX(rad(pose.spine?.flexion||0)),rotY(rad(pose.spine?.rotation||0)));
- const chest=pt(spine,[0,.40,0]),neck=pt(spine,[0,.73,0]);
- const head=pt(chain(spine,translate(0,.77,0),rotX(rad(pose.neck?.flexion||0)),rotY(rad(pose.neck?.rotation||0))),[0,.15,0]);
+ const chest=pt(spine,[0,.40,0]),neck=pt(spine,[0,.57,0]);
+ const head=pt(chain(spine,translate(0,.65,0),rotX(rad(pose.neck?.flexion||0)),rotY(rad(pose.neck?.rotation||0))),[0,.10,0]);
  const J={hip,chest,neck,head},S=[{a:hip,b:chest,r:.17,part:'torso'},{a:chest,b:neck,r:.11,part:'neck'}];
  for(const side of ['right','left']){
    const sign=side==='right'?1:-1;
@@ -46,7 +70,7 @@ export function characterSkeleton(e){
    J[side+'Shoulder']=shoulder;J[side+'Elbow']=elbow;J[side+'Hand']=hand;J[side+'Wrist']=wrist;
    S.push({a:shoulder,b:elbow,r:.077,part:'upperarm'},{a:elbow,b:wrist,r:.06,part:'forearm'},{a:wrist,b:hand,r:.055,part:'hand'});
    const hipBase=chain(root,translate(sign*.16,.91,0));
-   const thigh=chain(hipBase,rotX(rad(pose[side+'Hip']?.flexion||0)),rotZ(rad(pose[side+'Hip']?.abduction||0)));
+   const thigh=chain(hipBase,rotX(rad(pose[side+'Hip']?.flexion||0)),rotZ(rad(pose[side+'Hip']?.abduction||0)),rotY(rad(pose[side+'Hip']?.rotation||0)));
    const hipJoint=pt(hipBase),knee=pt(thigh,[0,-.45,0]);
    const calf=chain(thigh,translate(0,-.45,0),rotX(rad(pose[side+'Knee']?.flexion||0)));
    const ankle=pt(calf,[0,-.43,0]);const footFrame=chain(calf,translate(0,-.43,0),rotX(rad(pose[side+'Ankle']?.flexion||0)));const foot=pt(footFrame,[0,-.05,.14]);
@@ -58,7 +82,7 @@ export function characterSkeleton(e){
 function attachmentPoint(j,anchor){if(anchor==='rightUpperArm')return mulv(add(j.rightShoulder,j.rightElbow),.5);if(anchor==='leftUpperArm')return mulv(add(j.leftShoulder,j.leftElbow),.5);if(anchor==='rightForearm')return mulv(add(j.rightElbow,j.rightWrist),.5);if(anchor==='leftForearm')return mulv(add(j.leftElbow,j.leftWrist),.5);return j[anchor]||j.rightHand||j.chest;}
 function stateVisual(world,e,asset){const b=world.behaviors.find(v=>v.id===asset.behaviorId);return b?.visuals?.[e.status]||{};}
 function compile(gl,type,source){const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;}
-function program(gl){const vs=`attribute vec3 aPos;attribute vec3 aNormal;uniform mat4 uView,uProjection,uModel;varying vec3 vNormal;varying vec3 vWorld;void main(){vec4 world=uModel*vec4(aPos,1.);vWorld=world.xyz;vNormal=mat3(uModel)*aNormal;gl_Position=uProjection*uView*world;}`;
+function program(gl){const vs=`attribute vec3 aPos;attribute vec3 aNormal;uniform mat4 uView,uProjection,uModel;varying vec3 vNormal;varying vec3 vWorld;void main(){vec4 world=uModel*vec4(aPos,1.);vWorld=world.xyz;mat3 basis=mat3(uModel);vNormal=mat3(normalize(basis[0]),normalize(basis[1]),normalize(basis[2]))*aNormal;gl_Position=uProjection*uView*world;}`;
  const fs=`precision mediump float;uniform vec3 uColor;uniform float uAlpha;varying vec3 vNormal,vWorld;void main(){vec3 n=normalize(vNormal);float light=max(dot(n,normalize(vec3(-.5,.95,.65))),0.);float rim=max(dot(n,normalize(vec3(.5,.3,-.6))),0.);vec3 col=uColor*(.58+.40*light)+vec3(.07,.08,.09)*rim;gl_FragColor=vec4(col,uAlpha);}`;
  const p=gl.createProgram();gl.attachShader(p,compile(gl,gl.VERTEX_SHADER,vs));gl.attachShader(p,compile(gl,gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));return p;}
 export function createRenderer(canvas,overlay,callbacks={}){
@@ -70,7 +94,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
    shader=program(gl);gl.useProgram(shader);
    attrib={position:gl.getAttribLocation(shader,'aPos'),normal:gl.getAttribLocation(shader,'aNormal')};
    uniform={model:gl.getUniformLocation(shader,'uModel'),view:gl.getUniformLocation(shader,'uView'),projection:gl.getUniformLocation(shader,'uProjection'),color:gl.getUniformLocation(shader,'uColor'),alpha:gl.getUniformLocation(shader,'uAlpha')};
-   M={box:mesh(cuboid()),sphere:mesh(sphere()),cylinder:mesh(cylinder())};
+   M={box:mesh(cuboid()),sphere:mesh(sphere()),cylinder:mesh(cylinder()),capsule:mesh(capsule())};
    gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);
  }
  function useCanvasFallback(reason){
@@ -85,7 +109,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
  }
 
  function mesh(m){const v=gl.createBuffer(),idx=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,v);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(m.vertices),gl.STATIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idx);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(m.indices),gl.STATIC_DRAW);return {v,idx,count:m.indices.length};}
- let world=null,selected=null,activeJoint=null,axis='flexion',mode='select';let sceneJoints={},projected=[];
+ let world=null,selected=null,activeJoint=null,axis='flexion',mode='select';let sceneJoints={},projected=[],ghost=null;
  let alternative=null,stopped=false,lost=false,lossTimer=null,frameId=0,readyReported=false,directTouch=null;
  try{initializeGPU();}catch(err){useCanvasFallback('Gagal memulai WebGL: '+err.message);return alternative;}
  canvas.addEventListener('webglcontextlost',event=>{
@@ -116,16 +140,30 @@ export function createRenderer(canvas,overlay,callbacks={}){
    draw('box',chain(translate(0,-.075,0),scale(8,.15,7)),scene.environment?.floor||'#e9eeeb');
    if(scene.environment?.grid!==false){for(let i=-7;i<=7;i++){let x=i*.5;draw('box',chain(translate(x,.005,0),scale(.008,.005,6.9)),'#dce3e0');}for(let i=-6;i<=6;i++){let z=i*.5;draw('box',chain(translate(0,.005,z),scale(7.9,.005,.008)),'#dce3e0');}}
    sceneJoints={};projected=[];
+   if(ghost?.visible){
+     const e=scene.entities.find(x=>x.id===ghost.entityId);
+     if(e?.type==='character'){
+       const prev=characterSkeleton({...e,position:ghost.position,pose:ghost.pose});
+       gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
+       for(const s of prev.segments)draw('capsule',between(s.a,s.b,s.r*.88),'#9aaeb1',.23);
+       draw('sphere',chain(translate(...prev.joints.head),scale(.169,.18,.169)),'#b6c7c5',.20);
+       gl.depthMask(true);gl.disable(gl.BLEND);
+     }
+   }
    for(const e of scene.entities.filter(e=>e.type==='character')){
      const sk=characterSkeleton(e);sceneJoints[e.id]=sk.joints;
      const isSelected=selected===e.id,patient=e.role==='patient';const base=patient?'#d8a783':'#66ad99',jointColor=patient?'#c08d72':'#579e8c';
      draw('sphere',chain(translate(...sk.joints.hip),scale(.13,.13,.13)),base);
-     draw('cylinder',between(sk.joints.hip,sk.joints.chest,.108),base);
-     draw('cylinder',between(sk.joints.chest,sk.joints.neck,.075),base);
-     draw('cylinder',between(sk.joints.neck,sk.joints.head,.07),base);
-     draw('cylinder',between(sk.joints.leftShoulder,sk.joints.rightShoulder,.075),base);
-     draw('sphere',chain(translate(...sk.joints.head),scale(.168,.175,.165)),patient?'#e9c9af':'#b2dbcb');
-     for(const s of sk.segments){if(s.part==='torso'||s.part==='neck')continue;draw('cylinder',between(s.a,s.b,s.r),base);}
+     draw('capsule',between(sk.joints.hip,sk.joints.chest,.142),base);
+     draw('capsule',between(sk.joints.chest,sk.joints.neck,.088),base);
+     draw('capsule',between(sk.joints.neck,sk.joints.head,.073),base);
+     draw('capsule',between(sk.joints.chest,sk.joints.leftShoulder,.092),base);draw('capsule',between(sk.joints.chest,sk.joints.rightShoulder,.092),base);draw('capsule',between(sk.joints.hip,sk.joints.leftHip,.115),base);draw('capsule',between(sk.joints.hip,sk.joints.rightHip,.115),base);
+     draw('sphere',chain(translate(...sk.joints.head),scale(.177,.186,.175)),patient?'#e9c9af':'#b2dbcb');
+     for(const s of sk.segments){if(s.part==='torso'||s.part==='neck')continue;draw('capsule',between(s.a,s.b,s.r*1.08),base);}
+     for(const [name,p] of Object.entries(sk.joints)){
+       const radius=name.endsWith('Shoulder')?.092:name.endsWith('Hip')?.107:name.endsWith('Knee')?.091:name.endsWith('Elbow')?.080:name.endsWith('Wrist')?.062:name.endsWith('Ankle')?.074:0;
+       if(radius)draw('sphere',chain(translate(...p),scale(radius,radius,radius)),base);
+     }
      for(const [name,p] of Object.entries(sk.joints)){
        if(name==='chest'||name==='neck'||name==='hip'||name==='head')continue;
        if(isSelected&&name===activeJoint)draw('sphere',chain(translate(...p),scale(.086,.086,.086)),jointColor);
@@ -153,9 +191,9 @@ export function createRenderer(canvas,overlay,callbacks={}){
  function renderMarkers(){const markers=projected.filter(p=>p.joint&&p.joint===activeJoint&&p.screen.visible&&p.screen.z<1);let map=new Map();for(const p of markers){const id=p.entityId+'-'+p.joint;let el=overlay.querySelector(`[data-marker="${id}"]`);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${p.screen.x}px,${p.screen.y}px)`;el.classList.toggle('active',activeJoint===p.joint);map.set(id,1);}for(const el of overlay.children){if(!map.has(el.dataset.marker))el.remove();}}
  directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:getEntityPosition,camera,
   onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
-  onPreview(entity,hit,g){if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position);},
-  onCommit(ops,entity,gesture){callbacks.onCommitOperations?.(ops,gesture.baseRevision);},
-  onGesture(state,hit){callbacks.onGesture?.(state,hit);}
+  onPreview(entity,hit,g){if(ghost&&entity.id===ghost.entityId&&!g?.cancelled)ghost.visible=true;if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position,g);},
+  onCommit(ops){callbacks.onCommitOperations?.(ops);},
+  onGesture(state,hit){if(state==='start'&&hit?.kind!=='move-asset'){const e=world?.scene.entities.find(x=>x.id===hit?.entityId);ghost=e?.type==='character'?{entityId:e.id,pose:structuredClone(e.pose),position:[...e.position],visible:false}:null;}else if(['end','cancel','camera'].includes(state))ghost=null;callbacks.onGesture?.(state,hit);}
  });
  frameId=requestAnimationFrame(render);
  return {setWorld(v){world=v;alternative?.setWorld(v);},setSelected(id,joint=null){selected=id;activeJoint=joint;alternative?.setSelected(id,joint);},setAxis(x){axis=x;alternative?.setAxis(x);},setMode(x){mode=x;alternative?.setMode(x);},resetCamera(){if(alternative)return alternative.resetCamera();Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){if(alternative)return alternative.focusEntity(id);if(!world)return;const e=world.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=[...e.position];camera.target[1]+=.9;camera.distance=3.6;},project(p){return alternative?alternative.project(p):project(p);},getJointWorld(id,name){return alternative?alternative.getJointWorld(id,name):sceneJoints[id]?.[name]||null;},getObjectWorldPosition(id){if(alternative)return alternative.getObjectWorldPosition(id);const e=world?.scene.entities.find(x=>x.id===id);return e?getEntityPosition(e):null;},getBackend(){return alternative?'canvas2d':'webgl';},stop(){stopped=true;cancelAnimationFrame(frameId);directTouch?.destroy();}};
@@ -165,7 +203,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
 // The canonical scene remains 3D (XYZ + joint transforms), but visual quality is reduced.
 function createFallbackRenderer(canvas,overlay,callbacks={}){
  const ctx=canvas.getContext('2d');if(!ctx)throw Error('Browser tidak menyediakan Canvas 2D/WebGL');
- let world=null,selected=null,activeJoint=null,axis='flexion',mode='select',projected=[],jointWorld={};
+ let world=null,selected=null,activeJoint=null,axis='flexion',mode='select',projected=[],jointWorld={},ghost=null;
  let baseDistance=cameraDefaultDistance(canvas);
  const camera={azimuth:.65,elevation:.45,distance:baseDistance,target:[-.35,1,0]};
  window.addEventListener('resize',()=>{const next=cameraDefaultDistance(canvas);camera.distance=clamp(camera.distance*next/baseDistance,2.1,16);baseDistance=next;});
@@ -186,13 +224,18 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
    if(floor.every(x=>x.visible)){ctx.beginPath();ctx.moveTo(floor[0].x,floor[0].y);floor.slice(1).forEach(v=>ctx.lineTo(v.x,v.y));ctx.closePath();ctx.fillStyle=world.scene.environment?.floor||'#e9eeeb';ctx.fill();}
    if(world.scene.environment?.grid){ctx.globalAlpha=.3;for(let i=-8;i<=8;i++){line([i*.5,0,-3.5],[i*.5,0,3.5],.7,'#c9d8d2');line([-4,0,i*.4],[4,0,i*.4],.7,'#c9d8d2');}ctx.globalAlpha=1;}
    projected=[];jointWorld={};const entities=world.scene.entities;
+   if(ghost?.visible){const e=entities.find(e=>e.id===ghost.entityId);if(e?.type==='character'){
+     const old=characterSkeleton({...e,position:ghost.position,pose:ghost.pose});ctx.save();ctx.globalAlpha=.26;
+     for(const seg of old.segments)line(seg.a,seg.b,clamp(seg.r*870/camera.distance,7,24),'#92aeb1');
+     circle(old.joints.head,.19,'#a7bdba');ctx.restore();
+   }}
    for(const e of entities.filter(e=>e.type==='character')){const sk=characterSkeleton(e);jointWorld[e.id]=sk.joints;const clr=e.role==='doctor'?'#62aa96':'#dca887',detail=e.role==='doctor'?'#4b8e7c':'#c18d73';
      for(const s of sk.segments){if(['torso','neck'].includes(s.part))continue;line(s.a,s.b,clamp(s.r*990/camera.distance,9,32),clr);}
      line(sk.joints.hip,sk.joints.chest,clamp(96/camera.distance,13,28),clr);
      line(sk.joints.chest,sk.joints.neck,clamp(68/camera.distance,9,19),clr);
      line(sk.joints.neck,sk.joints.head,clamp(70/camera.distance,9,19),clr);
-     line(sk.joints.leftShoulder,sk.joints.rightShoulder,clamp(80/camera.distance,10,22),clr);
-     circle(sk.joints.hip,.13,clr);circle(sk.joints.head,.20,e.role==='doctor'?'#b2dbcb':'#e9c9af',detail);
+     line(sk.joints.chest,sk.joints.leftShoulder,clamp(67/camera.distance,10,18),clr);line(sk.joints.chest,sk.joints.rightShoulder,clamp(67/camera.distance,10,18),clr);line(sk.joints.hip,sk.joints.leftHip,clamp(70/camera.distance,9,20),clr);line(sk.joints.hip,sk.joints.rightHip,clamp(70/camera.distance,9,20),clr);
+     circle(sk.joints.hip,.092,clr);circle(sk.joints.head,.20,e.role==='doctor'?'#b2dbcb':'#e9c9af',detail);
      for(const [j,p] of Object.entries(sk.joints)){
        if(['head','hip','chest','neck'].includes(j))continue;if(selected===e.id&&j===activeJoint)circle(p,.052,detail);
        if(selected===e.id&&['Shoulder','Elbow','Hip','Knee','Wrist','Ankle'].some(part=>j.endsWith(part)))projected.push({entityId:e.id,joint:j,screen:project(p)});
@@ -208,9 +251,9 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
  requestAnimationFrame(render);}
  const directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:resolveWorld,camera,
   onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
-  onPreview(entity,hit,g){if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position);},
-  onCommit(ops,entity,gesture){callbacks.onCommitOperations?.(ops,gesture.baseRevision);},
-  onGesture(state,hit){callbacks.onGesture?.(state,hit);}
+  onPreview(entity,hit,g){if(ghost&&entity.id===ghost.entityId)ghost.visible=true;if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position,g);},
+  onCommit(ops){callbacks.onCommitOperations?.(ops);},
+  onGesture(state,hit){if(state==='start'&&hit?.kind!=='move-asset'){const e=world?.scene.entities.find(x=>x.id===hit?.entityId);ghost=e?.type==='character'?{entityId:e.id,pose:structuredClone(e.pose),position:[...e.position],visible:false}:null;}else if(['end','cancel','camera'].includes(state))ghost=null;callbacks.onGesture?.(state,hit);}
  });
  requestAnimationFrame(render);
  return {setWorld(v){world=v;},setSelected(id,joint=null){selected=id;activeJoint=joint;},setAxis(v){axis=v;},setMode(v){mode=v;},resetCamera(){Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){const e=world?.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=add(e.position,[0,.9,0]);camera.distance=3.5;},project,getJointWorld(id,name){return jointWorld[id]?.[name]||null;},getObjectWorldPosition(id){const e=world?.scene.entities.find(x=>x.id===id);return e?resolveWorld(e):null;},getBackend(){return 'canvas2d';},stop(){fallbackRunning=false;directTouch.destroy();}};

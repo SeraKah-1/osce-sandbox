@@ -1,30 +1,10 @@
+import {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3} from './ik3d.js';
+import {placementCandidate,chairCandidate} from './placement.js';
 // One touch language for every renderer. Posing is projected into screen space,
 // so no axis selector or slider is required. All edits remain ordinary scene operations.
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const pointOnSegment=(p,a,b)=>{const dx=b.x-a.x,dy=b.y-a.y,d=dx*dx+dy*dy||1,t=clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/d,0,1);return {x:a.x+t*dx,y:a.y+t*dy};};
-const limits={shoulderFlexion:[-150,170],shoulderAbduction:[-165,165],elbowFlexion:[-8,155],hipFlexion:[-135,95],hipAbduction:[-75,75],kneeFlexion:[-8,155]};
-const findPoseAxis=(key,axis)=>key.endsWith('Shoulder')?limits[axis==='flexion'?'shoulderFlexion':'shoulderAbduction']:
- key.endsWith('Elbow')?limits.elbowFlexion:key.endsWith('Hip')?limits[axis==='flexion'?'hipFlexion':'hipAbduction']:limits.kneeFlexion;
-const jointKeys=(side,limb,target)=>{const upper=side+(limb==='arm'?'Shoulder':'Hip'),middle=side+(limb==='arm'?'Elbow':'Knee');const keys=[[upper,'flexion'],[upper,'abduction']];if(target==='end')keys.push([middle,'flexion']);return keys;};
-export function solveScreenPose({entity,side,limb,targetPoint,aim,project,skeleton,iterations=12}){
- const keys=jointKeys(side,limb,targetPoint==='end'?'end':'middle');
- const endpoint=side+(limb==='arm'?(targetPoint==='end'?'Wrist':'Elbow'):(targetPoint==='end'?'Ankle':'Knee'));
- const current=()=>project(skeleton(entity).joints[endpoint]);
- let error=Infinity;
- for(let pass=0;pass<iterations;pass++){
-   const origin=current();if(!origin.visible)break;
-   const ex=aim.x-origin.x,ey=aim.y-origin.y;error=Math.hypot(ex,ey);if(error<1.2)break;
-   const jac=[];
-   for(const [joint,axis] of keys){const old=entity.pose[joint]?.[axis];if(!Number.isFinite(old)){jac.push([0,0]);continue;}
-     const delta=1;entity.pose[joint][axis]=clamp(old+delta,...findPoseAxis(joint,axis));const next=current();entity.pose[joint][axis]=old;const change=entity.pose[joint][axis]===undefined?0:Math.max(.001,clamp(old+delta,...findPoseAxis(joint,axis))-old);jac.push([(next.x-origin.x)/change,(next.y-origin.y)/change]);}
-   let xx=8,xy=0,yy=8;for(const [jx,jy] of jac){xx+=jx*jx;xy+=jx*jy;yy+=jy*jy;}
-   const det=xx*yy-xy*xy;if(det<.00001)break;
-   const vx=(yy*ex-xy*ey)/det,vy=(xx*ey-xy*ex)/det;
-   for(let i=0;i<keys.length;i++){const [joint,axis]=keys[i],old=entity.pose[joint][axis];const step=clamp(jac[i][0]*vx+jac[i][1]*vy,-13,13);entity.pose[joint][axis]=clamp(old+step,...findPoseAxis(joint,axis));}
- }
- return {error,changes:keys.map(([joint,axis])=>({joint,axis,angle:Math.round(entity.pose[joint][axis]*100)/100}))};
-}
 export function hitTestPuppet(world,project,skeleton,assetPosition,pointer){
  if(!world?.scene?.entities)return null;
  const candidates=[];
@@ -56,53 +36,130 @@ export function dragOnGround({origin,delta,project,pointHeight=1}){
  const moveX=(by*delta.x-bx*delta.y)/det,moveZ=(ax*delta.y-ay*delta.x)/det;
  return [clamp(origin[0]+moveX,-12,12),origin[1],clamp(origin[2]+moveZ,-12,12)];
 }
-// Input owner: a gesture belongs to the puppet, prop or camera until every finger is lifted.
-// Two fingers always control the camera; adding a finger rolls back unsaved puppet edits.
+// Direct-touch contract: one finger manipulates a body/prop or orbits empty
+// space. A second finger FREEZES and commits the current pose, then takes over
+// the camera. It never silently rolls the puppet back.
 export function installDirectTouch({canvas,getWorld,project,skeleton,assetPosition,camera,onSelect,onPreview,onCommit,onGesture}){
- const pointers=new Map();let gesture=null;const coordinate=e=>{const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};};
- const revert=g=>{if(!g?.origin)return;const entity=getWorld()?.scene.entities.find(x=>x.id===g.hit?.entityId);if(!entity)return;entity.position=[...g.origin.position];if(g.origin.pose)entity.pose=structuredClone(g.origin.pose);onPreview?.(entity,g.hit,null,true);};
- const begin=(e)=>{try{canvas.setPointerCapture(e.pointerId);}catch{} const p=coordinate(e);pointers.set(e.pointerId,p);
-   if(pointers.size>1){revert(gesture);onGesture?.('camera');const ps=[...pointers.values()];gesture={kind:'multitouch',distance:Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y),center:{x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2}};return;}
-   const world=getWorld(),hit=hitTestPuppet(world,project,skeleton,assetPosition,p);const entity=world?.scene.entities.find(x=>x.id===hit?.entityId);
-   if(hit)onSelect?.(hit.entityId,hit.kind==='pose'?hit.target.joint:null);
-   gesture={kind:hit?.kind||'orbit',hit,baseRevision:world?.scene.revision,initial:p,last:p,moved:false,origin:entity?{position:[...entity.position],pose:entity.type==='character'?structuredClone(entity.pose):null,rotation:[...(entity.rotation||[0,0,0])]}:null,
-     aim:hit?.world?project(hit.world):p};onGesture?.('start',hit);
+ const pointers=new Map();let gesture=null;
+ const coordinate=e=>{const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};};
+ const viewport=()=>({width:canvas.clientWidth||900,height:canvas.clientHeight||650});
+ const raf=typeof requestAnimationFrame==='function'?requestAnimationFrame:null;
+ const caf=typeof cancelAnimationFrame==='function'?cancelAnimationFrame:null;
+ const cancelFrame=g=>{if(g?.frame&&caf)caf(g.frame);if(g){g.frame=null;g.pending=null;}};
+ const resetProvisional=g=>{if(!g?.origin)return;const e=getWorld()?.scene.entities.find(e=>e.id===g.hit?.entityId);if(!e)return;
+   e.position=[...g.origin.position];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);onPreview?.(e,g.hit,null,true);};
+ const sceneEntity=g=>getWorld()?.scene.entities.find(e=>e.id===g?.hit?.entityId);
+ const applyPose=(g,p)=>{
+  if(!g||g.kind!=='pose')return;
+  const e=sceneEntity(g);if(!e)return;
+  const aim=projectedDragTarget({initial:g.initial,current:p,worldPoint:g.grabWorld,camera,...viewport()});
+  const result=solveTwoBone3D({entity:e,side:g.hit.target.side,limb:g.hit.target.limb,
+    target:aim,pole:g.pole,skeleton,targetPoint:g.hit.target.target});
+  g.ikError=result.error;g.reachLimit=result.constrained;onPreview?.(e,g.hit,g);
  };
- const move=e=>{if(!pointers.has(e.pointerId)||!gesture)return;const p=coordinate(e);pointers.set(e.pointerId,p);const g=gesture;
-   if(pointers.size>1){const pts=[...pointers.values()],dist=Math.max(12,Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y)),center={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
-     if(g.kind!=='multitouch'){revert(g);gesture={kind:'multitouch',distance:dist,center};return;}
-     camera.distance=clamp(camera.distance*g.distance/dist,2.1,16);const s=camera.distance*.0017;camera.target[0]-=(center.x-g.center.x)*s;camera.target[2]+=(center.y-g.center.y)*s;g.distance=dist;g.center=center;return;}
-   if(g.kind==='multitouch')return;
-   const dx=p.x-g.last.x,dy=p.y-g.last.y,delta={x:p.x-g.initial.x,y:p.y-g.initial.y};g.last=p;
-   if(Math.hypot(delta.x,delta.y)>4)g.moved=true;
-   if(g.kind==='orbit'){camera.azimuth-=dx*.007;camera.elevation=clamp(camera.elevation+dy*.007,-.05,1.45);return;}
-   if(!g.moved||!g.hit||!g.origin)return;
-   const ent=getWorld()?.scene.entities.find(x=>x.id===g.hit.entityId);if(!ent)return;
-   if(g.kind==='pose'){const target={x:g.aim.x+delta.x,y:g.aim.y+delta.y};const result=solveScreenPose({entity:ent,side:g.hit.target.side,limb:g.hit.target.limb,targetPoint:g.hit.target.target,aim:target,project,skeleton});g.ikError=result.error;}
-   else if(!ent.attachedTo){ent.position=dragOnGround({origin:g.origin.position,delta,project,pointHeight:g.kind==='move-character'?1.15:g.origin.position[1]});}
-   onPreview?.(ent,g.hit,g);
+ const schedulePose=(g,p)=>{g.pending=p;
+  if(g.frame)return;
+  if(!raf){const latest=g.pending;g.pending=null;applyPose(g,latest);return;}
+  g.frame=raf(()=>{g.frame=null;if(gesture!==g)return;const latest=g.pending;g.pending=null;if(latest)applyPose(g,latest);});
  };
- const finish=e=>{if(!pointers.has(e.pointerId))return;const cancelled=e.type!=='pointerup';pointers.delete(e.pointerId);const g=gesture;if(cancelled){pointers.clear();revert(g);gesture=null;onGesture?.('cancel');return;}
-   if(pointers.size)return;
-   gesture=null;onGesture?.('end',g?.hit);
-   if(!g?.moved||!g.hit||!g.origin||g.kind==='orbit'||g.kind==='multitouch')return;
-   const eNow=getWorld()?.scene.entities.find(x=>x.id===g.hit.entityId);if(!eNow)return;
-   const ops=[];
-   if(g.kind==='pose'){
-     for(const [joint,axes] of Object.entries(eNow.pose)){
-       for(const [axis,value] of Object.entries(axes)){
-         if(Math.abs(value-(g.origin.pose[joint]?.[axis]??0))>.15){
-           ops.push({type:'set_joint',entityId:eNow.id,joint,axis,angle:Math.round(value*100)/100});
-         }
-       }
-     }
-   }else if(!eNow.attachedTo&&eNow.position.some((x,i)=>Math.abs(x-g.origin.position[i])>.0001)){
-     ops.push({type:'move_entity',entityId:eNow.id,position:[...eNow.position]});
-   }
-   if(ops.length)onCommit?.(ops,eNow,g);
-   else revert(g);
+ const originalPosition=(g,p,applySnap=false)=>{
+  const e=sceneEntity(g);if(!e)return;
+  const origin=g.origin.position;
+  let next;
+  if(g.kind==='move-character'){
+    const start=[origin[0],1.15+origin[1],origin[2]];
+    const ray0=screenRay({pointer:g.initial,camera,...viewport()}),ray1=screenRay({pointer:p,camera,...viewport()});
+    const groundNormal=[0,1,0];const a=intersectRayPlane(ray0,start,groundNormal),b=intersectRayPlane(ray1,start,groundNormal);
+    if(a&&b)next=[origin[0]+b[0]-a[0],origin[1],origin[2]+b[2]-a[2]];
+    else next=dragOnGround({origin,delta:{x:p.x-g.initial.x,y:p.y-g.initial.y},project,pointHeight:1.15+origin[1]});
+  }else{
+    const anchor=g.grabWorld||origin;
+    next=projectedDragTarget({initial:g.initial,current:p,worldPoint:anchor,camera,...viewport()});
+    next=add3(origin,sub3(next,anchor));next[1]=origin[1];
+    const snap=placementCandidate(getWorld(),e,next);g.snap=snap;
+    if(snap&&applySnap)next=snap.position;
+  }
+  e.position=[clamp(next[0],-12,12),clamp(next[1],-5,12),clamp(next[2],-12,12)];
+  if(g.kind==='move-character'){
+    g.seat=chairCandidate(getWorld(),e.position);
+    if(g.seat&&applySnap){e.position=[...g.seat.position];const preset=getWorld()?.poses?.sitting;
+      if(preset)e.pose=structuredClone(preset);
+    }else if(g.origin.pose)e.pose=structuredClone(g.origin.pose);
+  }
+  onPreview?.(e,g.hit,g);
  };
- canvas.addEventListener('pointerdown',begin);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',finish);canvas.addEventListener('pointercancel',finish);canvas.addEventListener('lostpointercapture',finish);
- const wheel=e=>{e.preventDefault();camera.distance=clamp(camera.distance*(e.deltaY>0?1.09:.91),2.1,16)};canvas.addEventListener('wheel',wheel,{passive:false});
- return {destroy(){if(gesture){revert(gesture);gesture=null;pointers.clear();onGesture?.('cancel');}canvas.removeEventListener('pointerdown',begin);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',finish);canvas.removeEventListener('pointercancel',finish);canvas.removeEventListener('lostpointercapture',finish);canvas.removeEventListener('wheel',wheel);},active(){return !!gesture&&gesture.kind!=='orbit';}};
+ const operations=g=>{
+  if(!g?.moved||!g.hit||!g.origin)return [];
+  const e=sceneEntity(g);if(!e)return [];
+  const out=[];
+  if(e.position.some((n,i)=>Math.abs(n-g.origin.position[i])>1e-4))out.push({type:'move_entity',entityId:e.id,position:[...e.position]});
+  if(e.type==='character'&&g.origin.pose)for(const [joint,axes] of Object.entries(e.pose))for(const [axis,angle] of Object.entries(axes)){
+   if(Math.abs(angle-(g.origin.pose[joint]?.[axis]??0))>.025)out.push({type:'set_joint',entityId:e.id,joint,axis,angle:Math.round(angle*100)/100});
+  }
+  return out;
+ };
+ const commit=g=>{if(!g||['orbit','multitouch'].includes(g.kind))return;
+  cancelFrame(g);if(g.kind==='pose'&&g.moved&&g.last)applyPose(g,g.last);
+  else if(g.moved&&g.kind!=='orbit'&&g.last)originalPosition(g,g.last,true);
+  const ops=operations(g);
+  if(ops.length)onCommit?.(ops,sceneEntity(g),g);
+ };
+ const cameraGesture=()=>{const ps=[...pointers.values()];return {kind:'multitouch',distance:Math.max(12,distance(ps[0],ps[1])),center:{x:(ps[0].x+ps[1].x)*.5,y:(ps[0].y+ps[1].y)*.5}};};
+ const begin=e=>{
+  try{canvas.setPointerCapture(e.pointerId);}catch{}
+  const p=coordinate(e);pointers.set(e.pointerId,p);
+  if(pointers.size>1){commit(gesture);gesture=cameraGesture();onGesture?.('camera');return;}
+  const hit=hitTestPuppet(getWorld(),project,skeleton,assetPosition,p);
+  const ent=getWorld()?.scene.entities.find(x=>x.id===hit?.entityId);
+  if(hit)onSelect?.(hit.entityId,hit.kind==='pose'?hit.target.joint:null);
+  const origin=ent?{position:[...ent.position],pose:ent.type==='character'?structuredClone(ent.pose):null}:null;
+  const g={kind:hit?.kind||'orbit',hit,initial:p,last:p,moved:false,origin,
+    grabWorld:hit?.world?[...hit.world]:null,pole:null,frame:null,pending:null};
+  if(g.kind==='pose'&&ent){const spec=limbSpec(ent,hit.target.side,hit.target.limb,skeleton);g.pole=choosePole(spec);}
+  gesture=g;onGesture?.('start',hit,origin);
+ };
+ const move=e=>{
+  if(!pointers.has(e.pointerId)||!gesture)return;
+  const p=coordinate(e);pointers.set(e.pointerId,p);const g=gesture;
+  if(pointers.size>1){if(g.kind!=='multitouch'){commit(g);gesture=cameraGesture();onGesture?.('camera');return;}
+    const pts=[...pointers.values()],dist=Math.max(12,distance(pts[0],pts[1]));
+    const center={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+    camera.distance=clamp(camera.distance*g.distance/dist,2.1,16);
+    const pan=camera.distance*.0017,dx=center.x-g.center.x,dy=center.y-g.center.y;
+    const az=camera.azimuth,el=camera.elevation;
+    const right=[Math.cos(az),0,-Math.sin(az)],up=[-Math.sin(el)*Math.sin(az),Math.cos(el),-Math.sin(el)*Math.cos(az)];
+    for(let i=0;i<3;i++)camera.target[i]+=(-right[i]*dx+up[i]*dy)*pan;
+    g.distance=dist;g.center=center;return;
+  }
+  if(g.kind==='multitouch')return;
+  const dx=p.x-g.last.x,dy=p.y-g.last.y;g.last=p;
+  if(distance(p,g.initial)>3)g.moved=true;
+  if(g.kind==='orbit'){camera.azimuth-=dx*.0064;camera.elevation=clamp(camera.elevation+dy*.0064,-.05,1.45);return;}
+  if(!g.moved||!g.hit||!g.origin)return;
+  if(g.kind==='pose')schedulePose(g,p);else if(!sceneEntity(g)?.attachedTo)originalPosition(g,p);
+ };
+ const finish=e=>{
+  if(!pointers.has(e.pointerId))return;
+  const g=gesture,p=coordinate(e),cancelled=e.type==='pointercancel';
+  pointers.delete(e.pointerId);
+  if(cancelled){if(g?.kind==='multitouch'){
+      if(pointers.size){const rest=[...pointers.values()][0];gesture={kind:'orbit',initial:rest,last:rest,moved:false};return;}
+      gesture=null;onGesture?.('end');return;
+    }
+    cancelFrame(g);resetProvisional(g);gesture=null;pointers.clear();onGesture?.('cancel');return;
+  }
+  if(g?.kind==='multitouch'&&pointers.size===1){const rest=[...pointers.values()][0];gesture={kind:'orbit',initial:rest,last:rest,moved:false};onGesture?.('camera');return;}
+  if(pointers.size)return;
+  gesture=null;
+  if(g?.kind==='pose'&&g.moved){cancelFrame(g);applyPose(g,p);}
+  else if(g?.moved&&g.kind!=='orbit')originalPosition(g,p,true);
+  commit(g);onGesture?.('end',g?.hit);
+ };
+ const wheel=e=>{e.preventDefault();camera.distance=clamp(camera.distance*(e.deltaY>0?1.075:.93),2.1,16);};
+ const handleBlur=()=>{cancelFrame(gesture);resetProvisional(gesture);pointers.clear();gesture=null;onGesture?.('cancel');};
+ if(canvas.style)canvas.style.touchAction='none';
+ canvas.addEventListener('pointerdown',begin);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',finish);
+ canvas.addEventListener('pointercancel',finish);canvas.addEventListener('wheel',wheel,{passive:false});
+ globalThis.window?.addEventListener?.('blur',handleBlur);
+ return {destroy(){cancelFrame(gesture);canvas.removeEventListener('pointerdown',begin);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',finish);canvas.removeEventListener('pointercancel',finish);canvas.removeEventListener('wheel',wheel);globalThis.window?.removeEventListener?.('blur',handleBlur);},active(){return !!gesture&&gesture.kind!=='orbit';}};
 }
