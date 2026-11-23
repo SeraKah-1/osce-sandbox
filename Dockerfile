@@ -4,8 +4,8 @@ COPY package.json ./
 COPY server ./server
 COPY web ./web
 COPY docs ./docs
-RUN mkdir -p /app/data && chown -R node:node /app
+RUN mkdir -p /app/data/environments && chown -R node:node /app
 USER node
-ENV PORT=4173 HOST=0.0.0.0 STUDIO_DATA=/app/data/studio.json
+ENV PORT=4173 HOST=0.0.0.0
 EXPOSE 4173
 CMD ["node","server/index.js"]

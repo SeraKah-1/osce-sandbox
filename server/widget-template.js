@@ -9,7 +9,7 @@ export function renderWidget(assets){
  const ik=`const __ik3d=(()=>{${unexport(assets['ik3d.js'])}\nreturn {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3};})();`;
  const placement=`const __placement=(()=>{${unexport(assets['placement.js'])}\nreturn {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported};})();`;
  const touchSource=unexport(assets['touch-pose.js']).replace(/^import .*?;\s*/gm,'');
- const touch=`const {installDirectTouch}=(()=>{const {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3}=__ik3d;const {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported}=__placement;const {mechanismHandle,mechanismNextValue}=__assembly;\n${touchSource}\nreturn {installDirectTouch};})();`;
+ const touch=`const {installDirectTouch,rotationHandle}=(()=>{const {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3}=__ik3d;const {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported}=__placement;const {mechanismHandle,mechanismNextValue}=__assembly;\n${touchSource}\nreturn {installDirectTouch,rotationHandle};})();`;
  const graphics='const {partMatrix,assemblyRoot,mechanismHandle,transformPoint}=__assembly;\n'+unexport(assets['render3d.js']).replace(/^import .*?;\s*/gm,'');
  const ui=assets['app.js'].replace(/^import \{createRenderer\} from '\.\/render3d\.js';\s*/,'');
  const js=("window.__OSCE_EMBEDDED__=true;\n"+assembly+'\n'+ik+'\n'+placement+'\n'+touch+'\n'+graphics+'\n'+ui).replace(/<\/script/gi,'<\\/script');

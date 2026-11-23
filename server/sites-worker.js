@@ -1,6 +1,7 @@
 import {SceneError} from './studio.js';
 import {SiteSessions} from './site-sessions.js';
-import {rpc, toolsList} from './mcp-protocol.js';
+import {SiteEnvironments, blueprintTools, runBlueprintTool} from './site-environments.js';
+import {rpc, toolsList, callSceneTool, sessionState} from './mcp-protocol.js';
 import {renderWidget} from './widget-template.js';
 import assets from './assets.js';
 
@@ -51,12 +52,27 @@ async function control(request,bucket,identity,context) {
       const name=body.params?.name;
       if(!toolsList.some(tool=>tool.name===name))throw new SceneError('Tool tidak tersedia.','NOT_FOUND',404);
       const sessions=new SiteSessions(bucket,identity);
-      let id=body.params?.arguments?.sessionId;
-      if(name==='open_studio'&&!id)id=(await startSession(sessions,context)).sessionId;
-      const project=await sessions.open(id);
-      const reply=rpc(project.studio,body,()=>widget);
-      if (reply?.result?.isError===false) await project.commit();
-      return json(reply);
+      const library=new SiteEnvironments(bucket,identity);
+      const session=async(id,create=false)=>{
+        if(!id&&create)id=(await startSession(sessions,context)).sessionId;
+        return sessions.open(id);
+      };
+      const args=body.params?.arguments||{};
+      let value;
+      if(blueprintTools.has(name))value=await runBlueprintTool(library,session,name,args);
+      else if(name==='open_studio'&&args.environmentId){
+        const {record}=await library.read(args.environmentId);
+        const project=await session(args.sessionId,true);
+        await library.load(project,record);
+        value={...callSceneTool(project.studio,name,args),environmentRevision:record.revision};
+      }else{
+        const project=await session(args.sessionId,name==='open_studio');
+        if(['open_studio','get_world_state'].includes(name))await library.detachDeleted(project.studio);
+        value=await library.mutate(project,name,args);
+      }
+      const structuredContent=Array.isArray(value)?{result:value}:value;
+      return json({jsonrpc:'2.0',id:body.id,result:{isError:false,content:[{type:'text',text:JSON.stringify(value)}],structuredContent,
+        _meta:['open_studio','load_environment'].includes(name)?{ui:{resourceUri:'ui://osce-playground/studio.html'}}:undefined}});
     } catch (error) {
       const problem=error instanceof SceneError ? error : new SceneError('Penyimpanan sesi gagal.','STORAGE_ERROR',500);
       return json({jsonrpc:'2.0',id:body.id,result:{isError:true,content:[{type:'text',text:JSON.stringify({error:problem.message,code:problem.code})}]}});
@@ -96,11 +112,18 @@ function sessionEvents(sessions,id,signal,revision){
 async function studioApi(request,pathname,bucket,identity,context) {
   if (!identity) throw missingIdentity();
   const route=request.method+' '+pathname;
-  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'0.8.0'});
+  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'0.9.0'});
   const sessions=new SiteSessions(bucket,identity);
   if (route==='POST /api/session') return json(await startSession(sessions,context),201);
   if (route==='POST /api/save') return json({error:'Sesi sementara: penyimpanan permanen dinonaktifkan.'},410);
   const id=request.headers.get('x-studio-session');
+  const library=new SiteEnvironments(bucket,identity);
+  if(route==='GET /api/environments')return json({environments:await library.list()});
+  const openEnvironment=request.method==='POST' && /^\/api\/environments\/(env-[a-f0-9]{32})\/open$/.exec(pathname);
+  if(openEnvironment){
+    const {record}=await library.read(openEnvironment[1]);
+    return json(await library.load(await sessions.open(id),record));
+  }
   if (route==='DELETE /api/session'){await sessions.close(id);return json({ok:true,reset:true});}
   if (route==='GET /api/events') {
     const current=await sessions.revision(id);
@@ -111,7 +134,7 @@ async function studioApi(request,pathname,bucket,identity,context) {
   const project=await sessions.open(id);
   const {studio}=project;
   const method=request.method;
-  if (route==='GET /api/state') return json({sessionId:id,...studio.snapshot()});
+  if (route==='GET /api/state'){await library.detachDeleted(studio);return json(sessionState(studio));}
   if (route==='GET /api/log') return json(studio.log);
   if (!['POST','PATCH'].includes(method)) return json({error:'Endpoint tidak tersedia'},404);
 
@@ -149,7 +172,7 @@ export default {
     const pathname=url.pathname;
     const identity=request.headers.get('oai-authenticated-user-id');
     try {
-      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.8.0',persistentProjects:false},env.STUDIO?200:503);
+      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.9.0',persistentProjects:true},env.STUDIO?200:503);
       if (pathname==='/mcp' || pathname.startsWith('/api/')) {
         const origin=request.headers.get('Origin');
         if (origin && origin!==url.origin) throw new SceneError('Origin tidak diizinkan.','FORBIDDEN',403);

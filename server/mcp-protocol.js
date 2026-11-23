@@ -5,7 +5,7 @@ const str = (description='') => ({type:'string',description});
 const integer = (description='') => ({type:'integer',description});
 const vec = {type:'array',items:{type:'number'},minItems:3,maxItems:3,description:'[x,y,z] koordinat dunia dalam meter (atau radian untuk rotasi)'};
 export const toolsList = [
-  {name:'open_studio',description:'Open the fully interactive 3D OSCE Sandbox Studio directly in ChatGPT. Shows the current shared scene and controls for joints, assets, states and scenario.',inputSchema:obj(),_meta:{ui:{resourceUri:WIDGET_URI},'openai/outputTemplate':WIDGET_URI}},
+  {name:'open_studio',description:'Open the fully interactive 3D OSCE Sandbox Studio directly in ChatGPT. Shows the current shared scene and controls for joints, assets, states and scenario.',inputSchema:obj({environmentId:str('Optional saved environment ID to open') }),_meta:{ui:{resourceUri:WIDGET_URI},'openai/outputTemplate':WIDGET_URI}},
   {name:'get_world_state',description:'Read the complete current OSCE scene, including entity IDs, joint poses, assets, behaviors and revision. Call before editing.',inputSchema:obj()},
   {name:'get_asset_catalog',description:'List available built-in and AI-created equipment asset blueprints.',inputSchema:obj()},
   {name:'list_templates',description:'List OSCE scenario templates and pose presets.',inputSchema:obj()},
@@ -21,20 +21,43 @@ export const toolsList = [
   {name:'undo_scene',description:'Undo the last scene update. This modifies the shared scene.',inputSchema:obj()},
   {name:'redo_scene',description:'Redo a previously undone scene update.',inputSchema:obj()},
   {name:'get_execution_log',description:'Read recent successful changes and revisions.',inputSchema:obj()},
+  {name:'create_environment',description:'Create a durable named environment (world blueprint) and automatically save it. Optional scene operations build its initial arrangement. Optionally attach it to a tablet sessionId; subsequent MCP edits on that session auto-save while manual touches remain temporary.',inputSchema:obj({name:str('Environment name'),operations:{type:'array',items:{type:'object',additionalProperties:true},maxItems:50},sessionId:str('Optional tablet session to activate this saved world')},['name'])},
+  {name:'list_environments',description:'List persistent environments that ChatGPT created, including IDs, names, and saved revisions.',inputSchema:obj()},
+  {name:'get_environment',description:'Read a saved environment and its complete snapshot without opening a tablet session.',inputSchema:obj({environmentId:str('Saved environment ID')},['environmentId'])},
+  {name:'load_environment',description:'Load a saved environment into a tablet/ChatGPT studio session. Uses provided sessionId or creates a fresh session.',inputSchema:obj({environmentId:str('Saved environment ID'),sessionId:str('Optional existing session')},['environmentId']),_meta:{ui:{resourceUri:WIDGET_URI},'openai/outputTemplate':WIDGET_URI}},
+  {name:'rename_environment',description:'Rename a persistent environment; automatically save the metadata.',inputSchema:obj({environmentId:str(),name:str()},['environmentId','name'])},
+  {name:'delete_environment',description:'Permanently delete an environment and its saved scene. Requires confirmed=true; does not delete active temporary tablet scene.',inputSchema:obj({environmentId:str(),confirmed:{type:'boolean'}},['environmentId','confirmed'])},
+  {name:'undo_environment',description:'Permanently undo the last saved MCP edit to a named environment. Optionally reopen that blueprint in one tablet session; manual pose adjustments in that session will reset.',inputSchema:obj({environmentId:str(),sessionId:str()},['environmentId'])},
+  {name:'redo_environment',description:'Permanently redo a saved environment edit previously undone. Optionally reopen the changed blueprint in one tablet session.',inputSchema:obj({environmentId:str(),sessionId:str()},['environmentId'])},
   {name:'reset_world',description:'Destructive reset of scene to initial setup. Requires explicit confirmation flag.',inputSchema:obj({confirmed:{type:'boolean'}},['confirmed'])}
 ];
-const readOnlyTools=new Set(['open_studio','get_world_state','get_asset_catalog','list_templates','preview_scene_operations','test_behavior','validate_asset','validate_behavior','get_execution_log']);
-const additiveTools=new Set(['create_asset','create_behavior']);
+const readOnlyTools=new Set(['open_studio','get_world_state','get_asset_catalog','list_templates','preview_scene_operations','test_behavior','validate_asset','validate_behavior','get_execution_log','list_environments','get_environment']);
+const additiveTools=new Set(['create_asset','create_behavior','create_environment']);
+export const environmentMutations=new Set(['apply_scene_operations','create_asset','create_behavior','update_asset','update_behavior','reset_world']);
 for (const tool of toolsList) {
   tool.inputSchema.properties.sessionId=str('Active temporary session ID from open_studio or the tablet. Omit on open_studio to begin a fresh session.');
-  if(tool.name!=='open_studio')tool.inputSchema.required.push('sessionId');
+  if(tool.name!=='open_studio'&&!tool.name.endsWith('_environment')&&tool.name!=='list_environments')tool.inputSchema.required.push('sessionId');
+  if(environmentMutations.has(tool.name))tool.inputSchema.properties.saveToEnvironment={type:'boolean',description:'Default true. Set false for temporary changes made through direct controls.'};
   const readOnly=readOnlyTools.has(tool.name);
   tool.annotations={readOnlyHint:readOnly,openWorldHint:false,...(readOnly?{}:{destructiveHint:!additiveTools.has(tool.name)})};
 }
-function call(studio,name,args={}){
+export function sessionState(studio){
+  return {sessionId:studio.sessionId,environmentId:studio.environmentId??null,environmentRevision:studio.environmentRevision??null,...studio.snapshot()};
+}
+export function normalizeSceneArgs(args){
+  if(!Array.isArray(args.operations))return args;
+  const id=prefix=>prefix+'-'+crypto.randomUUID().replaceAll('-','');
+  const operations=args.operations.map(op=>{
+    if(['spawn_asset','spawn_character'].includes(op?.type)&&!op.id)return {...op,id:id('entity')};
+    if(op?.type==='set_scenario_details'&&op.scenario&&!op.scenario.id)return {...op,scenario:{...op.scenario,id:id('scenario')}};
+    return op;
+  });
+  return {...args,operations};
+}
+export function callSceneTool(studio,name,args={}){
   switch(name){
-    case 'open_studio':return {sessionId:studio.sessionId,...studio.snapshot(),studioVersion:'0.8.0',widgetResource:WIDGET_URI};
-    case 'get_world_state':return {sessionId:studio.sessionId,...studio.snapshot()};
+    case 'open_studio':return {...sessionState(studio),studioVersion:'0.9.0',widgetResource:WIDGET_URI};
+    case 'get_world_state':return sessionState(studio);
     case 'get_asset_catalog':return {assets:studio.assets,behaviors:studio.behaviors};
     case 'list_templates':return {templates:studio.snapshot().templates,poses:studio.snapshot().poses};
     case 'preview_scene_operations':return studio.preview(args.operations,args.baseRevision);
@@ -58,8 +81,8 @@ export function rpc(resolveStudio,body,widgetHTML){
   const {id,method,params={}}=body;
   if(id===undefined)return null; // notification
   try{
-    if(method==='server/discover')return {jsonrpc:'2.0',id,result:{supportedVersions:['2026-07-28'],capabilities:{tools:{},resources:{}},serverInfo:{name:'osce-sandbox-studio',version:'0.8.0'}}};
-    if(method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(params.protocolVersion)?params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'osce-sandbox-studio',version:'0.8.0'},instructions:'Tablet-first OSCE sandbox. You can create/edit equipment geometry and finite-state behavior without writing arbitrary code. Read world state first, preview major changes with preview_scene_operations, then commit using the current baseRevision. Clinical output is demonstrative, not validated clinical simulation.'}};
+    if(method==='server/discover')return {jsonrpc:'2.0',id,result:{supportedVersions:['2026-07-28'],capabilities:{tools:{},resources:{}},serverInfo:{name:'osce-sandbox-studio',version:'0.9.0'}}};
+    if(method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(params.protocolVersion)?params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'osce-sandbox-studio',version:'0.9.0'},instructions:'Tablet-first OSCE sandbox. You can create/edit equipment geometry and finite-state behavior without writing arbitrary code. Read world state first, preview major changes with preview_scene_operations, then commit using the current baseRevision. Create, load and delete saved environments with the environment tools. Editing a loaded environment through MCP saves those edits unless saveToEnvironment is false. Clinical output is demonstrative.'}};
     if(method==='ping')return {jsonrpc:'2.0',id,result:{}};
     if(method==='tools/list')return {jsonrpc:'2.0',id,result:{tools:toolsList}};
     if(method==='resources/list')return {jsonrpc:'2.0',id,result:{resources:[{uri:WIDGET_URI,name:'OSCE Sandbox Studio',title:'Interactive 3D OSCE Sandbox',mimeType:'text/html;profile=mcp-app'}]}};
@@ -68,7 +91,7 @@ export function rpc(resolveStudio,body,widgetHTML){
     if(method==='tools/call'){
       const args=params.arguments||{};
       const studio=typeof resolveStudio==='function'?resolveStudio(args.sessionId,params.name==='open_studio'):resolveStudio;
-      const value=call(studio,params.name,args);
+      const value=callSceneTool(studio,params.name,args);
       return {jsonrpc:'2.0',id,result:{content:[{type:'text',text:JSON.stringify(value)}],structuredContent:typeof value==='object'&&value!==null&&!Array.isArray(value)?value:{result:value},isError:false,_meta:params.name==='open_studio'?{ui:{resourceUri:WIDGET_URI}}:undefined}};
     }
     return {jsonrpc:'2.0',id,error:{code:-32601,message:`Method '${method}' not found`}};

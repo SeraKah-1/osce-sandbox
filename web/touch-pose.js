@@ -6,9 +6,20 @@ import {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupp
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const pointOnSegment=(p,a,b)=>{const dx=b.x-a.x,dy=b.y-a.y,d=dx*dx+dy*dy||1,t=clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/d,0,1);return {x:a.x+t*dx,y:a.y+t*dy};};
-export function hitTestPuppet(world,project,skeleton,assetPosition,pointer,detailSelection=null){
+export function rotationHandle(world,project,skeleton,assetPosition,selectedId){
+ const e=world?.scene?.entities?.find(x=>x.id===selectedId);
+ if(!e||(e.type==='asset'&&world.assets.find(a=>a.id===e.assetId)?.movable===false))return null;
+ const anchor=e.type==='character'?skeleton(e).joints.head:[...assetPosition(e)];
+ if(e.type==='asset'){const a=world.assets.find(a=>a.id===e.assetId);anchor[1]+=Math.max(.35,...(a?.parts||[]).map(p=>p.position[1]+p.size[1]*.5));}
+ const pos=project(anchor);
+ if(!pos?.visible||pos.z>=1)return null;
+ return {x:pos.x+48,y:pos.y-25,z:pos.z,entityId:e.id,world:anchor,visible:true};
+}
+export function hitTestPuppet(world,project,skeleton,assetPosition,pointer,detailSelection=null,rotationSelection=null){
  if(!world?.scene?.entities)return null;
  const candidates=[];
+ const rotate=rotationHandle(world,project,skeleton,assetPosition,rotationSelection);
+ if(rotate&&distance(rotate,pointer)<31)return {entityId:rotate.entityId,kind:'rotate-entity',d:distance(rotate,pointer),score:-100,world:rotate.world};
  const push=(entityId,kind,p,priority,target=null,rawWorld=null)=>{if(!p?.visible||p.z>=1)return;const d=distance(p,pointer);const radius=kind==='move-character'?36:kind==='pose'?31:kind==='move-asset'?43:32;
    if(d<=radius)candidates.push({entityId,kind,target,d,score:d-priority,world:rawWorld});};
  for(const e of world.scene.entities){
@@ -66,7 +77,7 @@ export function dragOnGround({origin,delta,project,pointHeight=1}){
 // Direct-touch contract: one finger manipulates a body/prop or orbits empty
 // space. A second finger FREEZES and commits the current pose, then takes over
 // the camera. It never silently rolls the puppet back.
-export function installDirectTouch({canvas,getWorld,project,skeleton,assetPosition,camera,getDetailSelection=()=>null,onSelect,onPreview,onCommit,onGesture,onPreviewMechanism,onPreviewRotation}){
+export function installDirectTouch({canvas,getWorld,project,skeleton,assetPosition,camera,getDetailSelection=()=>null,getRotationSelection=()=>null,onSelect,onPreview,onCommit,onGesture,onPreviewMechanism,onPreviewRotation}){
  const pointers=new Map();let gesture=null;
  const clearHold=g=>{if(g?.holdTimer){clearTimeout(g.holdTimer);g.holdTimer=null;}};
  const coordinate=e=>{const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};};
@@ -130,12 +141,12 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
     const anchor=g.grabWorld||origin;
     next=projectedDragTarget({initial:g.initial,current:p,worldPoint:anchor,camera,...viewport()});
     next=add3(origin,sub3(next,anchor));next[1]=origin[1];
-    const snap=placementCandidate(getWorld(),e,next);g.snap=snap;
+    const snap=placementCandidate(getWorld(),e,next,g.snap);g.snap=snap;
     if(snap&&applySnap)next=snap.position;
   }
   e.position=[clamp(next[0],-12,12),clamp(next[1],-5,12),clamp(next[2],-12,12)];
   if(g.kind==='move-character'){
-    g.characterSnap=characterPlacementCandidate(getWorld(),e,e.position);
+    g.characterSnap=characterPlacementCandidate(getWorld(),e,e.position,g.characterSnap);
     if(g.characterSnap&&applySnap){
       const c=g.characterSnap;e.position=[...c.position];e.rotation=[...c.rotation];
       e.pose=structuredClone(getWorld().poses[c.pose]);
@@ -183,7 +194,7 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
  };
  const commit=g=>{if(!g||['orbit','multitouch'].includes(g.kind))return;
   cancelFrame(g);if(g.kind==='pose'&&g.moved&&g.last)applyPose(g,g.last);
-  else if(g.moved&&g.kind!=='orbit'&&g.last)originalPosition(g,g.last,true);
+  else if(g.moved&&['move-character','move-asset'].includes(g.kind)&&g.last)originalPosition(g,g.last,true);
   const ops=operations(g);
   if(ops.length)onCommit?.(ops,sceneEntity(g),g);
  };
@@ -192,19 +203,16 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   try{canvas.setPointerCapture(e.pointerId);}catch{}
   const p=coordinate(e);pointers.set(e.pointerId,p);
   if(pointers.size>1){commit(gesture);gesture=cameraGesture();onGesture?.('camera');return;}
-  const hit=hitTestPuppet(getWorld(),project,skeleton,assetPosition,p,getDetailSelection());
+  const hit=hitTestPuppet(getWorld(),project,skeleton,assetPosition,p,getDetailSelection(),getRotationSelection());
   const ent=getWorld()?.scene.entities.find(x=>x.id===hit?.entityId);
   if(hit)onSelect?.(hit.entityId,hit.kind==='pose'?hit.target.joint:null);
   const origin=ent?{position:[...ent.position],pose:ent.type==='character'?structuredClone(ent.pose):null,controls:ent.type==='asset'?structuredClone(ent.controls||{}):null,rotation:[...ent.rotation],supportedBy:ent.supportedBy?structuredClone(ent.supportedBy):null,restingOn:ent.restingOn?structuredClone(ent.restingOn):null}:null;
   const g={kind:hit?.kind||'orbit',hit,initial:p,last:p,moved:false,origin,
     grabWorld:hit?.world?[...hit.world]:null,pole:null,frame:null,pending:null};
-  // Hold an object briefly, then drag to rotate its whole body. A right mouse drag is immediate.
-  if((g.kind==='move-character'||g.kind==='move-asset')&&ent){
-    if(e.pointerType==='mouse'&&e.button===2){g.kind='rotate-entity';onGesture?.('rotate',hit);}
-    else g.holdTimer=setTimeout(()=>{if(gesture===g&&!g.moved&&pointers.size===1){g.kind='rotate-entity';g.holdTimer=null;onGesture?.('rotate',hit);}},340);
-  }
+  // Rotation is explicit and discoverable, not a hidden 340ms hold gesture.
+  if((g.kind==='move-character'||g.kind==='move-asset')&&ent&&e.pointerType==='mouse'&&e.button===2)g.kind='rotate-entity';
   if(g.kind==='pose'&&ent){const spec=limbSpec(ent,hit.target.side,hit.target.limb,skeleton);g.pole=choosePole(spec);}
-  gesture=g;onGesture?.('start',hit,origin);
+  gesture=g;onGesture?.('start',hit,origin);if(g.kind==='rotate-entity')onGesture?.('rotate',hit);
  };
  const move=e=>{
   if(!pointers.has(e.pointerId)||!gesture)return;

@@ -34,13 +34,15 @@ export class SiteSessions {
   async open(id) {
     const object=await this.bucket.get(this.key(id));
     if (!object) throw sessionExpired();
-    const studio=new Studio(await object.json());
+    const savedState=await object.json();
+    const studio=new Studio(savedState);
+    for(const key of ['environmentId','environmentRevision','environmentContentRevision']) studio[key]=savedState[key]??null;
     studio.sessionId=id;
     const initial=studio.scene.revision;
     return {studio,commit:async()=>{
       const revision=studio.scene.revision;
       if (revision===initial) return;
-      const data=new TextEncoder().encode(JSON.stringify(studio.storedState()));
+      const data=new TextEncoder().encode(JSON.stringify({...studio.storedState(),environmentId:studio.environmentId,environmentRevision:studio.environmentRevision,environmentContentRevision:studio.environmentContentRevision}));
       if (data.byteLength>12_000_000) throw new SceneError('Sesi dan riwayat melebihi batas penyimpanan.','SESSION_TOO_LARGE',413);
       const saved=await this.bucket.put(this.key(id),data,{
         onlyIf:{etagMatches:object.etag},customMetadata:{revision:String(revision)},

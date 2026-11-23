@@ -3,7 +3,7 @@ import {mkdir,readFile,writeFile,copyFile,rm} from 'node:fs/promises';
 const read = path => readFile(path,'utf8');
 await rm('dist',{recursive:true,force:true});
 await mkdir('dist/server',{recursive:true});
-const sourceModules=['site-sessions.js','mcp-protocol.js','widget-template.js'];
+const sourceModules=['site-sessions.js','site-environments.js','mcp-protocol.js','widget-template.js'];
 await Promise.all(sourceModules.map(name=>copyFile('server/'+name,'dist/server/'+name)));
 await copyFile('server/sites-worker.js','dist/server/index.js');
 await copyFile('web/placement.js','dist/server/placement.js');

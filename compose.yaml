@@ -6,10 +6,11 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 4173
-      API_TOKEN: ${API_TOKEN:?Set a long random API_TOKEN in your environment}
-      STUDIO_DATA: /app/data/studio.json
+      API_TOKEN: ${API_TOKEN:?Set a long random API_TOKEN}
+      ENVIRONMENT_DATA_DIR: /app/data/environments
     volumes:
-      - osce-data:/app/data
+      - environment-data:/app/data
     restart: unless-stopped
+
 volumes:
-  osce-data:
+  environment-data:

@@ -1,4 +1,4 @@
-import {installDirectTouch} from './touch-pose.js';
+import {installDirectTouch,rotationHandle} from './touch-pose.js';
 import {partMatrix,assemblyRoot,mechanismHandle,transformPoint} from './assembly.js';
 // Small dependency-free WebGL renderer. All scene objects use genuine 3D vertices,
 // camera projection, lighting and depth-testing; no CDN/build step is required.
@@ -207,8 +207,8 @@ export function createRenderer(canvas,overlay,callbacks={}){
    try{renderFrame();if(!readyReported){readyReported=true;callbacks.onRendererStatus?.('ready','3D siap');}}
    catch(err){useCanvasFallback('Renderer WebGL gagal: '+err.message);callbacks.onRendererError?.(err);}
  }
- function renderMarkers(){const markers=projected.filter(p=>p.joint&&p.joint===activeJoint&&p.screen.visible&&p.screen.z<1);let map=new Map();for(const p of markers){const id=p.entityId+'-'+p.joint;let el=overlay.querySelector(`[data-marker="${id}"]`);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${p.screen.x}px,${p.screen.y}px)`;el.classList.toggle('active',activeJoint===p.joint);map.set(id,1);}for(const el of overlay.children){if(!map.has(el.dataset.marker))el.remove();}}
- directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:getEntityPosition,camera,getDetailSelection:()=>detailMode?selected:null,
+ function renderMarkers(){const markers=projected.filter(p=>p.joint&&p.joint===activeJoint&&p.screen.visible&&p.screen.z<1);let map=new Map();const turn=rotationHandle(world,project,characterSkeleton,getEntityPosition,selected);if(turn){let mark=overlay.querySelector('[data-marker="rotation-control"]');if(!mark){mark=document.createElement('div');mark.className='rotation-marker';mark.dataset.marker='rotation-control';mark.textContent='⟳';mark.setAttribute('aria-hidden','true');overlay.append(mark);}mark.style.transform=`translate(${turn.x}px,${turn.y}px)`;map.set('rotation-control',1);}for(const p of markers){const id=p.entityId+'-'+p.joint;let el=overlay.querySelector(`[data-marker="${id}"]`);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${p.screen.x}px,${p.screen.y}px)`;el.classList.toggle('active',activeJoint===p.joint);map.set(id,1);}for(const el of overlay.children){if(!map.has(el.dataset.marker))el.remove();}}
+ directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:getEntityPosition,camera,getDetailSelection:()=>detailMode?selected:null,getRotationSelection:()=>selected,
   onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
   onPreview(entity,hit,g){if(ghost&&entity.id===ghost.entityId&&!g?.cancelled)ghost.visible=true;if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position,g);},
   onCommit(ops){callbacks.onCommitOperations?.(ops);},
@@ -279,10 +279,10 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
    // furniture after that furniture, so the mattress never hides the patient.
    // WebGL instead uses genuine depth testing.
    for(const e of entities.filter(e=>e.type==='character'&&e.supportedBy))paintCharacter(e);
-   const known=new Set();for(const v of projected.filter(x=>x.joint&&x.joint===activeJoint&&x.screen.visible)){const id=v.entityId+'-'+v.joint;known.add(id);let el=[...overlay.children].find(el=>el.dataset.marker===id);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${v.screen.x}px,${v.screen.y}px)`;el.classList.toggle('active',v.joint===activeJoint);}for(const el of [...overlay.children])if(!known.has(el.dataset.marker))el.remove();
+   const known=new Set();const turn=rotationHandle(world,project,characterSkeleton,resolveWorld,selected);if(turn){let mark=[...overlay.children].find(e=>e.dataset.marker==='rotation-control');if(!mark){mark=document.createElement('div');mark.className='rotation-marker';mark.dataset.marker='rotation-control';mark.textContent='⟳';overlay.append(mark);}mark.style.transform=`translate(${turn.x}px,${turn.y}px)`;known.add('rotation-control');}for(const v of projected.filter(x=>x.joint&&x.joint===activeJoint&&x.screen.visible)){const id=v.entityId+'-'+v.joint;known.add(id);let el=[...overlay.children].find(el=>el.dataset.marker===id);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${v.screen.x}px,${v.screen.y}px)`;el.classList.toggle('active',v.joint===activeJoint);}for(const el of [...overlay.children])if(!known.has(el.dataset.marker))el.remove();
  }
  requestAnimationFrame(render);}
- const directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:resolveWorld,camera,getDetailSelection:()=>detailMode?selected:null,
+ const directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:resolveWorld,camera,getDetailSelection:()=>detailMode?selected:null,getRotationSelection:()=>selected,
   onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
   onPreview(entity,hit,g){if(ghost&&entity.id===ghost.entityId)ghost.visible=true;if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position,g);},
   onCommit(ops){callbacks.onCommitOperations?.(ops);},

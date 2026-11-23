@@ -25,8 +25,11 @@
 .puppet-dragging .selection-card{opacity:0;pointer-events:none}
 @media(max-width:700px){.selection-card.compact{bottom:82px;right:8px;width:min(225px,calc(100% - 16px))}}
 
-/* v0.8 - direct manipulation above controls; detail tools stay contextual. */
+/* v0.9 - direct manipulation and contextual macro/micro tools remain visually minimal. */
 .detail-hud{position:absolute;top:65px;left:14px;z-index:7;display:flex;align-items:center;gap:13px;max-width:min(400px,calc(100% - 28px));background:#ffffffed;border:1px solid #e5ede8;border-radius:16px;padding:10px 12px;box-shadow:0 6px 20px #526b671a;backdrop-filter:blur(12px)}
 .detail-hud span{display:flex;flex-direction:column;gap:2px;min-width:0}.detail-hud strong{font-size:12px;color:#486d6d}.detail-hud small{font-size:10px;color:#809091;line-height:1.35}.detail-hud button{border:0;background:#dceaf1;color:#426a83;padding:9px 12px;border-radius:11px;font-size:11px;font-weight:700;min-height:40px}
 .mechanism-row{display:flex;align-items:center;gap:6px;margin:8px 0;padding:7px 8px;background:#f2f7f5;border-radius:12px}.mechanism-row span{flex:1;display:flex;flex-direction:column;gap:2px}.mechanism-row strong{font-size:12px;color:#4b6b71}.mechanism-row small{font-size:10px;color:#8a999a}.mechanism-row button{flex:none;min-width:44px;min-height:44px;font-size:18px;padding:6px 10px}
 @media(max-width:700px){.detail-hud{top:56px;left:9px}.detail-hud small{max-width:220px}}
+
+.rotation-marker{position:absolute;left:0;top:0;width:48px;height:48px;border:2px solid #648bca;border-radius:50%;background:#f4f8ffdd;color:#4d78b6;display:grid;place-items:center;font:700 31px/1 system-ui;transform-origin:center;translate:-50% -50%;box-shadow:0 4px 12px #648bc233;pointer-events:none;user-select:none}
+.puppet-dragging .rotation-marker{opacity:.7}

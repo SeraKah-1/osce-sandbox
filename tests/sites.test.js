@@ -25,7 +25,7 @@ function fixture() {
       return object;
     },
     async delete(keys){for(const key of [keys].flat())objects.delete(key);},
-    async list({prefix}){return {objects:[...objects.keys()].filter(key=>key.startsWith(prefix)).sort().map(key=>({key})),truncated:false};},
+    async list({prefix}){return {objects:[...objects.keys()].filter(key=>key.startsWith(prefix)).sort().map(key=>({key,customMetadata:objects.get(key).customMetadata})),truncated:false};},
   };
   function request(path,{user,session,method='GET',payload,origin}={}){
     const headers={};
@@ -47,11 +47,11 @@ const operate=(request,session,title,revision=0)=>request('/api/operations',{
   method:'POST',user:'a',session,payload:{baseRevision:revision,operations:[{type:'rename_scene',title}]},
 });
 
-test('Sites serves v0.8 browser modules and the embedded editor with 17 MCP tools',async()=>{
+test('Sites serves v0.9 browser modules and the embedded editor with 25 MCP tools',async()=>{
   const {request}=fixture();
   assert.deepEqual((await rpc(request,'server/discover')).result.supportedVersions,['2026-07-28']);
   const tools=(await rpc(request,'tools/list')).result.tools;
-  assert.equal(tools.length,17);
+  assert.equal(tools.length,25);
   assert.ok(tools.find(tool=>tool.name==='get_world_state').inputSchema.required.includes('sessionId'));
   assert.ok(!tools.some(tool=>tool.name==='save_scene'));
   const uri=tools.find(tool=>tool.name==='open_studio')._meta.ui.resourceUri;
@@ -77,7 +77,7 @@ test('tablet and MCP share only the same active session and preserve archived v0
   const {request,objects}=fixture();
   const first=await create(request);
   const fresh=(await call(request,'open_studio')).structuredContent;
-  assert.equal(fresh.studioVersion,'0.8.0');
+  assert.equal(fresh.studioVersion,'0.9.0');
   assert.notEqual(first.sessionId,fresh.sessionId);
   assert.equal(first.scene.revision,0);
   assert.equal(fresh.scene.revision,0);
@@ -140,4 +140,64 @@ test('expired hosted sessions cannot be read and cleanup never deletes archived 
   assert.ok(!objects.has(expired));
   assert.ok(objects.has('projects/a.json'));
   assert.equal(objects.size,2);
+});
+
+test('hosted environments persist only ChatGPT edits, support reload, and stay deleted',async()=>{
+  const {request,objects}=fixture();
+  const first=await create(request);
+  const opened=await call(request,'create_environment',{
+    name:'Environment uji',sessionId:first.sessionId,
+    operations:[{type:'rename_scene',title:'Blueprint awal'}],
+  });
+  assert.equal(opened.isError,false);
+  const id=opened.structuredContent.environment.id;
+  const editing=opened.structuredContent.scene.revision;
+  const list=await call(request,'list_environments');
+  assert.equal(list.structuredContent.environments[0].id,id);
+  assert.deepEqual((await call(request,'list_environments',{},'b')).structuredContent.environments,[]);
+  assert.equal((await call(request,'get_environment',{environmentId:id},'b')).isError,true);
+  const manual=await call(request,'apply_scene_operations',{sessionId:first.sessionId,baseRevision:editing,saveToEnvironment:false,
+    operations:[{type:'set_joint',entityId:'patient',joint:'rightElbow',axis:'flexion',angle:40}]});
+  const manualRevision=manual.structuredContent.revision;
+  assert.equal((await request('/api/operations',{user:'a',session:first.sessionId,method:'POST',
+    payload:{baseRevision:manualRevision,operations:[{type:'set_joint',entityId:'patient',joint:'rightElbow',axis:'flexion',angle:70}]}})).status,200);
+  const saved=await call(request,'apply_scene_operations',{sessionId:first.sessionId,baseRevision:manualRevision+1,
+    operations:[{type:'spawn_asset',assetId:'chair',position:[1,0,1]}]});
+  assert.equal(saved.structuredContent.autoSaved,true);
+  const blueprint=(await call(request,'get_environment',{environmentId:id})).structuredContent;
+  assert.equal(blueprint.snapshot.scene.entities.find(e=>e.id==='patient').pose.rightElbow.flexion,0);
+  const temp=(await call(request,'get_world_state',{sessionId:first.sessionId})).structuredContent;
+  assert.equal(temp.scene.entities.find(e=>e.id==='patient').pose.rightElbow.flexion,70);
+  const chair=blueprint.snapshot.scene.entities.find(e=>e.assetId==='chair');
+  assert.ok(chair);
+  assert.ok(temp.scene.entities.some(e=>e.id===chair.id));
+  const second=await create(request);
+  const reload=await request('/api/environments/'+id+'/open',{user:'a',session:second.sessionId,method:'POST'});
+  assert.ok((await reload.json()).scene.entities.some(e=>e.id===chair.id));
+  assert.equal((await call(request,'delete_environment',{environmentId:id,confirmed:false})).isError,true);
+  assert.equal((await call(request,'delete_environment',{environmentId:id,confirmed:true})).structuredContent.deleted,true);
+  assert.equal((await call(request,'get_environment',{environmentId:id})).isError,true);
+  const alive=(await call(request,'get_world_state',{sessionId:first.sessionId})).structuredContent;
+  assert.equal(alive.environmentId,null);
+  assert.ok(alive.scene.entities.some(e=>e.id===chair.id));
+  assert.equal([...objects.keys()].some(key=>key.includes(id)),false);
+});
+
+test('hosted environment revisions block competing editors while durable undo and redo work',async()=>{
+  const {request}=fixture();
+  const created=(await call(request,'create_environment',{name:'Riwayat uji'})).structuredContent;
+  const environmentId=created.environment.id;
+  const [a,b]=await Promise.all([call(request,'load_environment',{environmentId}),call(request,'load_environment',{environmentId})]);
+  const write=(open,title)=>call(request,'apply_scene_operations',{
+    sessionId:open.structuredContent.sessionId,baseRevision:open.structuredContent.scene.revision,
+    operations:[{type:'rename_scene',title}],
+  });
+  const [first,second]=await Promise.all([write(a,'A'),write(b,'B')]);
+  assert.equal([first,second].filter(result=>!result.isError).length,1);
+  const saved=(await call(request,'get_environment',{environmentId})).structuredContent.snapshot.scene.title;
+  assert.ok(['A','B'].includes(saved));
+  assert.equal((await call(request,'undo_environment',{environmentId})).isError,false);
+  assert.equal((await call(request,'get_environment',{environmentId})).structuredContent.snapshot.scene.title,'My Studio');
+  assert.equal((await call(request,'redo_environment',{environmentId})).isError,false);
+  assert.equal((await call(request,'get_environment',{environmentId})).structuredContent.snapshot.scene.title,saved);
 });

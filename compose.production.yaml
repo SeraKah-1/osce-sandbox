@@ -1,5 +1,4 @@
-# Deploy on a VPS with a public DNS record pointed at this host.
-# cp .env.production.example .env and set DOMAIN and API_TOKEN first.
+# Public HTTPS deployment requires your own DNS and strong API_TOKEN.
 services:
   studio:
     build: .
@@ -8,14 +7,14 @@ services:
       HOST: 0.0.0.0
       PORT: 4173
       API_TOKEN: ${API_TOKEN:?Provide a strong API_TOKEN}
-      STUDIO_DATA: /app/data/studio.json
-    volumes:
-      - osce-data:/app/data
+      ENVIRONMENT_DATA_DIR: /app/data/environments
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4173/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4173/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
+    volumes:
+      - environment-data:/app/data
     networks: [internal]
   caddy:
     image: caddy:2-alpine
@@ -24,7 +23,7 @@ services:
       studio:
         condition: service_healthy
     environment:
-      DOMAIN: ${DOMAIN:?Set your public DNS domain}
+      DOMAIN: ${DOMAIN:?Set your DNS domain}
     ports:
       - "80:80"
       - "443:443"
@@ -37,6 +36,6 @@ services:
 networks:
   internal:
 volumes:
-  osce-data:
   caddy-data:
   caddy-config:
+  environment-data:
