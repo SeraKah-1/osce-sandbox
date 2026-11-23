@@ -152,6 +152,7 @@ async function reload({quiet=false,force=false}={}){
   if(pending.length){if(latest.scene.revision!==pendingRevision){status('error','Konflik perubahan');showError('Perubahan bersamaan','Scene server sudah berubah sejak draft dibuat. Ekspor draft sebelum memutuskan pemulihan; sistem tidak akan menimpa data orang lain.');return;}
     const result=await tool('apply_scene_operations',{baseRevision:pendingRevision,operations:pending});if(!result.ok)throw Error(result.error||'Sinkronisasi draft gagal');pending=[];pendingRevision=null;storeDraft();const committed=await tool('get_world_state');applyData(committed);
   }else if(!quiet||!data||latest.scene.revision!==data.scene.revision)applyData(latest);
+  else status('ok',`Tersinkron · r${data.scene.revision}`);
   if(!frameReady){$('loadingDetail').textContent='Menyiapkan 3D…';setTimeout(()=>{if(!frameReady&&data){$('loadingDetail').textContent='GPU sedang menyiapkan tampilan…';}},600);}
   else hideLoading();if(!quiet)clearError();
  }catch(err){status('error',pending.length?'Draft belum sinkron':'Offline');if(!quiet){showError('Tidak dapat membaca scene',err.message);if(!data)loadingFailure(err.message);}throw err;}finally{refreshLock=false;}

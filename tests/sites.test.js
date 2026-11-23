@@ -5,9 +5,10 @@ import {execFileSync} from 'node:child_process';
 
 execFileSync(process.execPath,['scripts/build-sites.mjs']);
 const {default:worker}=await import('../dist/server/index.js');
+const {Studio}=await import('../dist/server/studio.js');
 
-function fixture() {
-  const objects=new Map();
+function fixture(seed) {
+  const objects=new Map(seed ? [['projects/a.json',{etag:'previous',body:JSON.stringify(seed)}]] : []);
   let version=0;
   const env={STUDIO:{
     async get(key){
@@ -93,4 +94,25 @@ test('preview never writes and the older resource URI serves the new editor', as
   assert.equal(state.scene.revision,1);
   const legacy=(await rpc(request,'resources/read',{uri:'ui://osce-sandbox-studio/interactive.html'})).result;
   assert.match(legacy.contents[0].text,/OSCE Playground/);
+});
+
+test('v0.2 projects keep assets and history while upgrading the built-in instrument grip',async()=>{
+  const saved=new Studio().storedState();
+  const grip=saved.behaviors.find(behavior=>behavior.id==='attach-basic');
+  delete grip.transitions.find(transition=>transition.action==='hold').effects;
+  saved.scene.title='Previous project';
+  saved.scene.revision=8;
+  saved.undoStack.push(structuredClone({scene:saved.scene,assets:saved.assets,behaviors:saved.behaviors}));
+  const request=fixture(saved);
+  const fromPlugin=(await rpc(request,'tools/call',{name:'open_studio'},'a')).result.structuredContent;
+  const fromBrowser=await (await request('/api/state',{user:'a'})).json();
+  assert.equal(fromPlugin.studioVersion,'0.3.0');
+  assert.equal(fromBrowser.scene.title,'Previous project');
+  assert.deepEqual(fromPlugin.scene,fromBrowser.scene);
+  assert.deepEqual(fromBrowser.assets,saved.assets);
+  assert.equal(fromPlugin.behaviors[0].transitions[0].effects[0].anchor,'rightHand');
+  assert.equal((await request('/api/undo',{method:'POST',user:'a'})).status,200);
+  const afterUndo=await (await request('/api/state',{user:'a'})).json();
+  assert.equal(afterUndo.scene.revision,9);
+  assert.equal(afterUndo.behaviors[0].transitions[0].effects[0].anchor,'rightHand');
 });

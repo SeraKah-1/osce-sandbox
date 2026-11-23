@@ -32,7 +32,7 @@ for (const tool of toolsList) {
 }
 function call(studio,name,args={}){
   switch(name){
-    case 'open_studio':return studio.snapshot();
+    case 'open_studio':return {...studio.snapshot(),studioVersion:'0.3.0',widgetResource:WIDGET_URI};
     case 'get_world_state':return studio.snapshot();
     case 'get_asset_catalog':return {assets:studio.assets,behaviors:studio.behaviors};
     case 'list_templates':return {templates:studio.snapshot().templates,poses:studio.snapshot().poses};

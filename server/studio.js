@@ -73,10 +73,20 @@ function validateBehavior(b){
   const visuals=b.visuals||{};if(typeof visuals!=='object'||Array.isArray(visuals)||visuals===null||Object.keys(visuals).some(s=>!unique.includes(s)))fail('visuals harus berisi status yang ada');for(const spec of Object.values(visuals)){if(!spec||typeof spec!=='object'||Array.isArray(spec)||(spec.color!==undefined&&!color(spec.color))||(spec.scale!==undefined&&(!finite(spec.scale)||spec.scale<.3||spec.scale>3)))fail('visual state invalid');}
   return {id:b.id,name:b.name,states:unique,initial:b.initial,transitions:copy(b.transitions),visuals:copy(visuals),custom:true,version:Number.isInteger(b.version)?b.version:1};
 }
+// v0.2 saved the built-in grip rules alongside user assets and in undo snapshots.
+function upgradeBuiltInGrip(state) {
+  const activeGrip=state.behaviors.find(behavior=>behavior.id==='attach-basic'&&!behavior.custom);
+  const hold=activeGrip?.transitions.find(transition=>transition.from==='free'&&transition.action==='hold'&&transition.to==='held');
+  if (hold && !hold.effects?.length) {
+    hold.effects=copy(builtInBehaviors[0].transitions[0].effects);
+  }
+}
 export class Studio {
   constructor(state=null) {
     const loaded=state || {scene:defaultScene(),assets:builtInAssets,behaviors:builtInBehaviors};
-    const {scene,assets,behaviors,log=[],undoStack=[],redoStack=[]}=copy(loaded);
+    const current=copy(loaded);
+    const {scene,assets,behaviors,log=[],undoStack=[],redoStack=[]}=current;
+    for (const entry of [current,...undoStack,...redoStack]) upgradeBuiltInGrip(entry);
     Object.assign(this,{scene,assets,behaviors,log,undoStack,redoStack});
     this.listeners=new Set();
   }
