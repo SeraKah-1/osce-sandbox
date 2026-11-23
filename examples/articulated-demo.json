@@ -1,0 +1,22 @@
+{
+  "id": "articulated-demonstrator",
+  "name": "Articulated Demonstrator",
+  "category": "Komponen latihan",
+  "description": "Objek generik untuk membuktikan rotasi makro dan gerakan engsel, slider, dial, tombol. Bukan model alat medis.",
+  "movable": true,
+  "parts": [
+    {"id":"housing","shape":"box","position":[0,0.18,0],"size":[0.45,0.2,0.34],"color":"#b2dbcb"},
+    {"id":"lever","shape":"capsule","position":[0.28,0.27,0],"size":[0.23,0.065,0.065],"color":"#e9c9af"},
+    {"id":"slide","shape":"box","position":[0,0.35,0],"size":[0.11,0.05,0.11],"color":"#648bca"},
+    {"id":"dial","shape":"torus","position":[-0.16,0.31,0.0],"size":[0.12,0.05,0.12],"color":"#e9c9af"},
+    {"id":"button","shape":"cylinder","position":[0.17,0.31,0.07],"size":[0.055,0.025,0.055],"color":"#648bca"},
+    {"id":"hose","shape":"tube","position":[0,0.18,0],"size":[0.02,0.02,0.02],"points":[[0,0,0],[-0.1,0.15,-0.1],[-0.23,0.16,-0.1]],"color":"#7e9ba6"}
+  ],
+  "anchors": [{"id":"grip","position":[0,0.18,0]}],
+  "mechanisms": [
+    {"id":"lever-hinge","label":"Tuas engsel","kind":"hinge","partIds":["lever"],"pivot":[0.07,0.27,0],"axis":[0,0,1],"min":-45,"max":65,"initial":0},
+    {"id":"linear-slide","label":"Penggeser","kind":"slider","partIds":["slide"],"pivot":[0,0.35,0],"axis":[1,0,0],"min":-0.1,"max":0.1,"initial":0},
+    {"id":"rotary-dial","label":"Pemutar","kind":"dial","partIds":["dial"],"pivot":[-0.16,0.31,0],"axis":[0,1,0],"min":0,"max":270,"initial":0},
+    {"id":"push-button","label":"Tombol tekan","kind":"button","partIds":["button"],"pivot":[0.17,0.31,0.07],"axis":[0,-1,0],"min":0,"max":0.02,"initial":0}
+  ]
+}

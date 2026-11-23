@@ -70,8 +70,27 @@ export function defaultScene(){return {schemaVersion:1,id:'main',revision:0,titl
  ]};}
 function validateAsset(asset){
   if(!asset||!cleanId(asset.id)||typeof asset.name!=='string'||asset.name.trim().length<2||asset.name.length>90) fail('Aset membutuhkan id dan nama yang valid');
-  if(!Array.isArray(asset.parts)||asset.parts.length<1||asset.parts.length>60) fail('Aset membutuhkan 1–60 bagian 3D');
-  for(const part of asset.parts){if(!['box','sphere','cylinder'].includes(part.shape)||!vector(part.position,20)||!vector(part.size,20)||part.size.some(n=>n<=.002)||!color(part.color)) fail(`Geometri tidak valid pada aset ${asset.id}`);}
+  if(!Array.isArray(asset.parts)||asset.parts.length<1||asset.parts.length>100) fail('Aset membutuhkan 1–100 bagian 3D');
+  for(const part of asset.parts){
+    if(!['box','sphere','cylinder','capsule','cone','torus','tube'].includes(part.shape)||!vector(part.position,20)||!vector(part.size,20)||part.size.some(n=>n<=.002)||!color(part.color)||(part.rotation!==undefined&&!vector(part.rotation,6.284))||(part.id!==undefined&&!cleanId(part.id)))fail(`Geometri tidak valid pada aset ${asset.id}`);
+    if(part.shape==='tube'&&(!Array.isArray(part.points)||part.points.length<2||part.points.length>25||part.points.some(v=>!vector(v,20))))fail('Tube memerlukan 2–25 titik 3D');
+  }
+  const partIDs=new Set();for(const part of asset.parts)if(part.id){if(partIDs.has(part.id))fail('ID part duplikat');partIDs.add(part.id);}
+  const mechanisms=asset.mechanisms||[];
+  if(!Array.isArray(mechanisms)||mechanisms.length>24)fail('Maksimal 24 mekanisme per aset');
+  const mIDs=new Set(),controlledParts=new Set();
+  for(const m of mechanisms){
+    if(!m||!cleanId(m.id)||mIDs.has(m.id)||typeof m.label!=='string'||!m.label.trim()||m.label.length>65||!['hinge','dial','slider','button'].includes(m.kind)||!Array.isArray(m.partIds)||!m.partIds.length||m.partIds.length>60||m.partIds.some(id=>!partIDs.has(id))||!vector(m.pivot,20)||!vector(m.axis,1)||Math.hypot(...m.axis)<.001||![m.min,m.max,m.initial].every(finite)||m.min>=m.max||m.initial<m.min||m.initial>m.max)fail('Definisi mekanisme alat tidak valid');
+    if(['hinge','dial'].includes(m.kind)&&(m.min < -360||m.max>360))fail('Sudut mekanisme melebihi 360 derajat');
+    if(['slider','button'].includes(m.kind)&&(m.min<-.8||m.max>.8))fail('Jarak gerak mekanisme terlalu jauh');
+    if(m.kind==='button'&&Math.abs(m.min)>.00001)fail('Tombol harus memiliki min=0');
+    if(m.parentId!==undefined&&!cleanId(m.parentId))fail('Parent mekanisme tidak valid');
+    if(m.triggers!==undefined&&(!m.triggers||typeof m.triggers!=='object'||Array.isArray(m.triggers)||Object.keys(m.triggers).some(x=>!['min','max'].includes(x)||!cleanId(m.triggers[x]))))fail('Trigger mekanisme tidak valid');
+    for(const id of m.partIds){if(controlledParts.has(id))fail('Bagian alat hanya boleh dimiliki satu mekanisme');controlledParts.add(id);}
+    mIDs.add(m.id);
+  }
+  for(const m of mechanisms){if(m.parentId&&!mIDs.has(m.parentId))fail('Parent mekanisme tidak ditemukan');const seen=new Set([m.id]);let cursor=m;while(cursor.parentId){if(seen.has(cursor.parentId))fail('Mekanisme membentuk siklus');seen.add(cursor.parentId);cursor=mechanisms.find(x=>x.id===cursor.parentId);if(!cursor)break;}}
+
   if(asset.anchors!==undefined){if(!Array.isArray(asset.anchors)||asset.anchors.length>30||asset.anchors.some(a=>!cleanId(a.id)||!vector(a.position,20))) fail('Anchor aset tidak valid');}
   const affords=asset.affordances||[];
   if(!Array.isArray(affords)||affords.length>12)fail('Maksimal 12 interaksi permukaan per aset');
@@ -94,7 +113,7 @@ function validateAsset(asset){
   if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).length>20)fail('Parameter aset tidak valid');
   for(const [key,value] of Object.entries(params))if(!cleanId(key)||!(typeof value==='boolean'||(typeof value==='string'&&value.length<=100)||(finite(value)&&Math.abs(value)<=100000)))fail('Nilai parameter tidak valid');
   if(asset.behaviorId!==undefined && asset.behaviorId!==null && !cleanId(asset.behaviorId)) fail('behaviorId tidak valid');
-  return {id:asset.id,name:asset.name.trim(),category:String(asset.category||'Buatan AI').slice(0,45),description:String(asset.description||'').slice(0,400),parts:copy(asset.parts),anchors:copy(asset.anchors||[]),affordances:copy(affords),movable:asset.movable!==false,parameters:copy(params),behaviorId:asset.behaviorId||null,custom:true,version:Number.isInteger(asset.version)?asset.version:1};
+  return {id:asset.id,name:asset.name.trim(),category:String(asset.category||'Buatan AI').slice(0,45),description:String(asset.description||'').slice(0,400),parts:copy(asset.parts),mechanisms:copy(mechanisms),anchors:copy(asset.anchors||[]),affordances:copy(affords),movable:asset.movable!==false,parameters:copy(params),behaviorId:asset.behaviorId||null,custom:true,version:Number.isInteger(asset.version)?asset.version:1};
 }
 function validateBehavior(b){
   if(!b||!cleanId(b.id)||typeof b.name!=='string'||b.name.length>90||!Array.isArray(b.states)||b.states.length<1||b.states.length>24) fail('Behavior membutuhkan id, nama, dan 1–24 state');
@@ -113,7 +132,7 @@ function validateBehavior(b){
 // Reject broken AI equipment contracts at creation/update time, not after
 // the learner taps an action in the scene.
 function verifyAssetBehavior(asset,behaviors){
- if(!asset.behaviorId)return;
+ if(!asset.behaviorId){if((asset.mechanisms||[]).some(m=>Object.keys(m.triggers||{}).length))fail('Trigger mekanisme membutuhkan behaviorId','INCOMPATIBLE_BEHAVIOR');return;}
  const behavior=behaviors.find(b=>b.id===asset.behaviorId);
  if(!behavior)fail('Behavior referensi tidak ada','NOT_FOUND');
  const params=asset.parameters||{};
@@ -128,6 +147,7 @@ function verifyAssetBehavior(asset,behaviors){
      if(effect.type==='adjust_parameter'&&typeof params[effect.key]!=='number')fail(`Parameter '${effect.key}' harus berupa angka`,'INCOMPATIBLE_BEHAVIOR');
    }
  }
+ for(const mechanism of asset.mechanisms||[])for(const action of Object.values(mechanism.triggers||{}))if(!behavior.transitions.some(t=>t.action===action))fail(`Aksi '${action}' pada mekanisme '${mechanism.id}' tidak ada di behavior`,'INCOMPATIBLE_BEHAVIOR');
 }
 function upgradeBuiltInAffordances(state) {
   const catalog=new Map(builtInAssets.filter(asset=>asset.affordances).map(asset=>[asset.id,asset.affordances]));
@@ -173,6 +193,10 @@ export class Studio {
   createBehavior(input){const behavior=validateBehavior(input);if(this.behaviors.some(b=>b.id===behavior.id))fail('ID behavior sudah dipakai','CONFLICT');return this.transaction(()=>{this.behaviors.push(behavior);return behavior},'create_behavior');}
   updateAsset(id,changes){const i=this.assets.findIndex(a=>a.id===id);if(i<0)fail('Aset tidak ditemukan','NOT_FOUND');if(!this.assets[i].custom)fail('Aset bawaan tidak bisa ditimpa; duplikasi dengan ID baru');const asset=validateAsset({...this.assets[i],...changes,id,version:this.assets[i].version+1});verifyAssetBehavior(asset,this.behaviors);
    for(const e of this.scene.entities.filter(e=>e.type==='asset'&&e.assetId===id))for(const [key,value] of Object.entries(e.parameters||{}))if(!Object.hasOwn(asset.parameters,key)||typeof asset.parameters[key]!==typeof value)fail(`Parameter '${key}' sedang digunakan`,'INCOMPATIBLE_UPDATE');
+   for(const e of this.scene.entities.filter(e=>e.type==='asset'&&e.assetId===id))for(const [control,value] of Object.entries(e.controls||{})){
+     const mechanism=asset.mechanisms.find(m=>m.id===control);
+     if(!mechanism||value<mechanism.min||value>mechanism.max)fail(`Mekanisme '${control}' sedang dipakai dan tidak kompatibel`,'INCOMPATIBLE_UPDATE');
+   }
    const used=new Set(this.scene.entities.filter(e=>e.attachedTo&&this.scene.entities.some(parent=>parent.id===e.attachedTo&&parent.assetId===id)).map(e=>e.anchor));
    for(const anchor of used)if(!asset.anchors.some(a=>a.id===anchor))fail(`Anchor '${anchor}' masih dipakai oleh instrumen lain`,'INCOMPATIBLE_UPDATE');
    for(const dependent of this.scene.entities.filter(e=>(e.supportedBy?.entityId||e.restingOn?.entityId)&&this.scene.entities.some(parent=>parent.id===(e.supportedBy?.entityId||e.restingOn?.entityId)&&parent.assetId===id))){
@@ -213,7 +237,7 @@ export class Studio {
       case 'spawn_character':{
         if(entities.length>=250)fail('Batas 250 objek');const id=op.id||uid('human');if(!cleanId(id)||entities.some(x=>x.id===id))fail('ID entity duplikat/tidak valid');const e={id,type:'character',role:op.role==='doctor'?'doctor':'patient',name:String(op.name||'Karakter').slice(0,65),position:op.position||[0,0,0],rotation:[0,0,0],pose:neutralPose()};if(!vector(e.position,30))fail('Posisi tidak valid');entities.push(e);return e;}
       case 'spawn_asset':{
-        if(entities.length>=250)fail('Batas 250 objek');const asset=this.assets.find(a=>a.id===op.assetId);if(!asset)fail(`Aset '${op.assetId}' tidak tersedia`,'NOT_FOUND');const id=op.id||uid('object');if(!cleanId(id)||entities.some(e=>e.id===id))fail('ID entity duplikat/tidak valid');const e={id,type:'asset',assetId:asset.id,name:asset.name,position:op.position||[0,0,0],rotation:op.rotation||[0,0,0],status:this.behaviors.find(b=>b.id===asset.behaviorId)?.initial||null,parameters:copy(asset.parameters||{})};if(!vector(e.position,30)||!vector(e.rotation,7))fail('Transform tidak valid');entities.push(e);return e;}
+        if(entities.length>=250)fail('Batas 250 objek');const asset=this.assets.find(a=>a.id===op.assetId);if(!asset)fail(`Aset '${op.assetId}' tidak tersedia`,'NOT_FOUND');const id=op.id||uid('object');if(!cleanId(id)||entities.some(e=>e.id===id))fail('ID entity duplikat/tidak valid');const e={id,type:'asset',assetId:asset.id,name:asset.name,position:op.position||[0,0,0],rotation:op.rotation||[0,0,0],status:this.behaviors.find(b=>b.id===asset.behaviorId)?.initial||null,parameters:copy(asset.parameters||{}),controls:Object.fromEntries((asset.mechanisms||[]).map(m=>[m.id,m.initial]))};if(!vector(e.position,30)||!vector(e.rotation,7))fail('Transform tidak valid');entities.push(e);return e;}
       case 'move_entity': {const e=entity();if(!vector(op.position,30))fail('Posisi tidak valid');
        const def=this.assets.find(a=>a.id===e.assetId);if(e.type==='asset'&&def?.movable===false)fail('Objek ini dikunci untuk dipindah');
        e.position=copy(op.position);delete e.supportedBy;delete e.restingOn;
@@ -255,6 +279,21 @@ export class Studio {
       case 'apply_pose': {const e=entity();if(e.type!=='character')fail('Pose hanya untuk karakter');const preset=POSES[op.presetId];if(!preset)fail('Pose preset tidak ditemukan');e.pose=copy(preset);if(e.supportedBy){delete e.supportedBy;e.rotation[0]=0;e.position[1]=0;}return e.id;}
       case 'attach':{const e=entity();const target=entities.find(x=>x.id===op.targetId);if(e.type!=='asset'||!target||e.id===target.id)fail('Target attach tidak valid');const visited=new Set([e.id]);let ptr=target;while(ptr?.attachedTo){if(visited.has(ptr.id))fail('Attachment melingkar');visited.add(ptr.id);ptr=entities.find(x=>x.id===ptr.attachedTo);}if(ptr&&visited.has(ptr.id))fail('Attachment melingkar');const anchor=String(op.anchor||'rightHand');requireAnchor(target,anchor,this.assets);delete e.restingOn;e.attachedTo=target.id;e.anchor=anchor;return e.id;}
       case 'detach':{const e=entity();delete e.attachedTo;delete e.anchor;return e.id;}
+      case 'set_mechanism':{
+       const e=entity();if(e.type!=='asset')fail('Mekanisme hanya tersedia pada alat');
+       const def=this.assets.find(a=>a.id===e.assetId),m=def?.mechanisms?.find(m=>m.id===op.mechanismId);
+       if(!m)fail('Mekanisme tidak tersedia','NOT_FOUND');
+       if(!finite(op.value)||op.value<m.min-1e-7||op.value>m.max+1e-7)fail('Nilai mekanisme di luar batas','OUT_OF_RANGE');
+       if(!e.controls)e.controls=Object.fromEntries((def.mechanisms||[]).map(x=>[x.id,x.initial]));
+       const prior=e.controls[m.id]??m.initial;
+       const value=Math.max(m.min,Math.min(m.max,op.value));e.controls[m.id]=value;
+       // A trigger only runs when crossing into an endpoint; never on a no-op.
+       const edge=Math.abs(value-m.max)<1e-6&&Math.abs(prior-m.max)>=1e-6?'max':Math.abs(value-m.min)<1e-6&&Math.abs(prior-m.min)>=1e-6?'min':null;
+       let event=null;if(edge&&m.triggers?.[edge]){
+         event=this.operation({type:'trigger_action',entityId:e.id,action:m.triggers[edge]});
+       }
+       return {entityId:e.id,mechanismId:m.id,value,event};
+      }
       case 'trigger_action':{const e=entity();if(e.type!=='asset')fail('Aksi hanya untuk instrumen');const a=this.assets.find(a=>a.id===e.assetId);const b=this.behaviors.find(b=>b.id===a?.behaviorId);if(!b)fail('Instrumen tidak punya behavior');const t=b.transitions.find(t=>t.from===(e.status||b.initial)&&t.action===op.action);if(!t)fail(`Aksi '${op.action}' tidak tersedia pada state '${e.status}'`,'INVALID_TRANSITION');
         for(const guard of t.when||[]){
          const current=e.parameters?.[guard.key];if(current===undefined)fail('Parameter syarat tidak tersedia','CONDITION_NOT_MET');
@@ -317,6 +356,13 @@ export class Studio {
       }
       if(e.type==='asset'){
         const def=snapshot.assets.find(a=>a.id===e.assetId);
+        if(e.controls!==undefined){
+          if(!e.controls||typeof e.controls!=='object'||Array.isArray(e.controls))fail('Kontrol snapshot tidak valid');
+          for(const [id,value] of Object.entries(e.controls)){
+            const m=(def.mechanisms||[]).find(x=>x.id===id);
+            if(!m||!finite(value)||value<m.min||value>m.max)fail('Status mekanisme snapshot tidak valid');
+          }
+        }
         if(e.parameters!==undefined){
          if(!e.parameters||typeof e.parameters!=='object'||Array.isArray(e.parameters)||Object.keys(e.parameters).some(k=>!Object.hasOwn(def.parameters||{},k)||typeof e.parameters[k]!==typeof def.parameters[k]))fail('Parameter instrumen snapshot tidak valid');
         }

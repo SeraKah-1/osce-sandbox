@@ -50,6 +50,7 @@
     <button class="camera-control" id="resetCamera" type="button" title="Reset kamera" aria-label="Reset kamera"><svg><use href="#i-focus"/></svg></button>
    </div>
    <div class="renderer-pill" id="rendererPill" hidden></div>
+   <div class="detail-hud" id="detailHud" hidden><span><strong>Detail Mode</strong><small id="detailValue">Sentuh titik biru pada alat untuk menggerakkan bagiannya</small></span><button type="button" id="detailClose" aria-label="Tutup mode detail">Selesai</button></div>
    <div class="interaction-hint" id="interactionHint">Tarik boneka langsung · Lepas untuk membekukan · Cubit untuk zoom</div>
    <div class="loading-overlay" id="loadingOverlay" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Menyiapkan playground…</strong><small id="loadingDetail">Memuat scene</small><button type="button" class="soft-button" id="retryLoad" hidden>Coba lagi</button></div>
    <div class="error-bar" id="errorBar" role="alert" hidden><svg><use href="#i-alert"/></svg><div class="error-copy"><strong id="errorTitle">Ada masalah</strong><span id="errorText"></span></div><button type="button" id="errorDismiss" aria-label="Tutup error"><svg><use href="#i-close"/></svg></button></div>

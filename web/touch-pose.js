@@ -1,11 +1,12 @@
 import {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3} from './ik3d.js';
+import {mechanismHandle,mechanismNextValue} from './assembly.js';
 import {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported} from './placement.js';
 // One touch language for every renderer. Posing is projected into screen space,
 // so no axis selector or slider is required. All edits remain ordinary scene operations.
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const pointOnSegment=(p,a,b)=>{const dx=b.x-a.x,dy=b.y-a.y,d=dx*dx+dy*dy||1,t=clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/d,0,1);return {x:a.x+t*dx,y:a.y+t*dy};};
-export function hitTestPuppet(world,project,skeleton,assetPosition,pointer){
+export function hitTestPuppet(world,project,skeleton,assetPosition,pointer,detailSelection=null){
  if(!world?.scene?.entities)return null;
  const candidates=[];
  const push=(entityId,kind,p,priority,target=null,rawWorld=null)=>{if(!p?.visible||p.z>=1)return;const d=distance(p,pointer);const radius=kind==='move-character'?36:kind==='pose'?31:kind==='move-asset'?43:32;
@@ -25,7 +26,12 @@ export function hitTestPuppet(world,project,skeleton,assetPosition,pointer){
    for(const j of ['chest','hip','neck','head'])push(e.id,'move-character',P[j],5,null,J[j]);
    if(P.hip?.visible&&P.chest?.visible){const q=pointOnSegment(pointer,P.hip,P.chest),d=distance(pointer,q);if(d<33)candidates.push({entityId:e.id,kind:'move-character',d,score:d-5,world:J.chest});}
   }else{
-   if(world.assets.find(a=>a.id===e.assetId)?.movable===false)continue;
+   const defForDetail=world.assets.find(a=>a.id===e.assetId);
+   if(detailSelection===e.id)for(const m of defForDetail?.mechanisms||[]){
+      const handle=mechanismHandle(defForDetail,e,m,assetPosition(e));
+      push(e.id,'micro',project(handle),26,{mechanismId:m.id},handle);
+   }
+   if(defForDetail?.movable===false)continue;
    const pos=assetPosition(e),p=project(pos);push(e.id,'move-asset',p,6,null,pos);
    const def=world.assets.find(a=>a.id===e.assetId),yaw=e.rotation?.[1]||0;
    if(!def?.parts?.length)continue;
@@ -60,15 +66,16 @@ export function dragOnGround({origin,delta,project,pointHeight=1}){
 // Direct-touch contract: one finger manipulates a body/prop or orbits empty
 // space. A second finger FREEZES and commits the current pose, then takes over
 // the camera. It never silently rolls the puppet back.
-export function installDirectTouch({canvas,getWorld,project,skeleton,assetPosition,camera,onSelect,onPreview,onCommit,onGesture}){
+export function installDirectTouch({canvas,getWorld,project,skeleton,assetPosition,camera,getDetailSelection=()=>null,onSelect,onPreview,onCommit,onGesture,onPreviewMechanism,onPreviewRotation}){
  const pointers=new Map();let gesture=null;
+ const clearHold=g=>{if(g?.holdTimer){clearTimeout(g.holdTimer);g.holdTimer=null;}};
  const coordinate=e=>{const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};};
  const viewport=()=>({width:canvas.clientWidth||900,height:canvas.clientHeight||650});
  const raf=typeof requestAnimationFrame==='function'?requestAnimationFrame:null;
  const caf=typeof cancelAnimationFrame==='function'?cancelAnimationFrame:null;
- const cancelFrame=g=>{if(g?.frame&&caf)caf(g.frame);if(g){g.frame=null;g.pending=null;}};
+ const cancelFrame=g=>{clearHold(g);if(g?.frame&&caf)caf(g.frame);if(g){g.frame=null;g.pending=null;}};
  const resetProvisional=g=>{if(!g?.origin)return;const e=getWorld()?.scene.entities.find(e=>e.id===g.hit?.entityId);if(!e)return;
-   e.position=[...g.origin.position];e.rotation=[...g.origin.rotation];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);
+   e.position=[...g.origin.position];e.rotation=[...g.origin.rotation];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);if(g.origin.controls)e.controls=structuredClone(g.origin.controls);
    if(g.origin.supportedBy)e.supportedBy=structuredClone(g.origin.supportedBy);else delete e.supportedBy;
    if(g.origin.restingOn)e.restingOn=structuredClone(g.origin.restingOn);else delete e.restingOn;
    if(e.type==='asset')reflowSupported(getWorld(),e.id);onPreview?.(e,g.hit,null,true);};
@@ -85,6 +92,29 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   if(g.frame)return;
   if(!raf){const latest=g.pending;g.pending=null;applyPose(g,latest);return;}
   g.frame=raf(()=>{g.frame=null;if(gesture!==g)return;const latest=g.pending;g.pending=null;if(latest)applyPose(g,latest);});
+ };
+ const applyMicro=(g,p,tap=false)=>{
+   const e=sceneEntity(g);if(!e)return;
+   const def=getWorld()?.assets.find(a=>a.id===e.assetId),m=def?.mechanisms?.find(m=>m.id===g.hit?.target?.mechanismId);
+   if(!m)return;
+   const base=g.origin.controls?.[m.id]??m.initial;
+   const delta=m.kind==='slider'?(p.x-g.initial.x)*.0025:(p.x-g.initial.x)*.55+(g.initial.y-p.y)*.18;
+   const next=mechanismNextValue(m,base,delta);
+   if(!e.controls)e.controls={};
+   e.controls[m.id]=m.kind==='button'?(tap?mechanismNextValue(m,base,0):base):next;
+   if(Math.abs(e.controls[m.id]-base)>1e-6)g.moved=true;
+   onPreviewMechanism?.(e.id,m,e.controls[m.id]);
+ };
+ const applyRotation=(g,p)=>{
+   const e=sceneEntity(g);if(!e)return;
+   const dx=p.x-g.initial.x,dy=p.y-g.initial.y;
+   const rotation=[...g.origin.rotation];
+   rotation[1]=clamp(rotation[1]-dx*.012,-6.283,6.283);
+   rotation[0]=clamp(rotation[0]-dy*.008,-Math.PI,Math.PI);
+   e.rotation=rotation;
+   if(e.type==='character')delete e.supportedBy;
+   if(e.type==='asset')reflowSupported(getWorld(),e.id);
+   onPreviewRotation?.(e.id,rotation);
  };
  const originalPosition=(g,p,applySnap=false)=>{
   const e=sceneEntity(g);if(!e)return;
@@ -126,6 +156,12 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
  };
  const operations=g=>{
   if(!g?.moved||!g.hit||!g.origin)return [];
+  if(g.kind==='micro'){
+    const e=sceneEntity(g),id=g.hit?.target?.mechanismId;
+    if(!e||!id||!Number.isFinite(e.controls?.[id]))return [];
+    if(Math.abs(e.controls[id]-(g.origin.controls?.[id]??0))<1e-6)return [];
+    return [{type:'set_mechanism',entityId:e.id,mechanismId:id,value:e.controls[id]}];
+  }
   const e=sceneEntity(g);if(!e)return [];
   if(e.type==='character'&&g.kind==='move-character'&&e.supportedBy){
     return [{type:'place_character',entityId:e.id,supportId:e.supportedBy.entityId,affordanceId:e.supportedBy.affordanceId}];
@@ -156,12 +192,17 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   try{canvas.setPointerCapture(e.pointerId);}catch{}
   const p=coordinate(e);pointers.set(e.pointerId,p);
   if(pointers.size>1){commit(gesture);gesture=cameraGesture();onGesture?.('camera');return;}
-  const hit=hitTestPuppet(getWorld(),project,skeleton,assetPosition,p);
+  const hit=hitTestPuppet(getWorld(),project,skeleton,assetPosition,p,getDetailSelection());
   const ent=getWorld()?.scene.entities.find(x=>x.id===hit?.entityId);
   if(hit)onSelect?.(hit.entityId,hit.kind==='pose'?hit.target.joint:null);
-  const origin=ent?{position:[...ent.position],pose:ent.type==='character'?structuredClone(ent.pose):null,rotation:[...ent.rotation],supportedBy:ent.supportedBy?structuredClone(ent.supportedBy):null,restingOn:ent.restingOn?structuredClone(ent.restingOn):null}:null;
+  const origin=ent?{position:[...ent.position],pose:ent.type==='character'?structuredClone(ent.pose):null,controls:ent.type==='asset'?structuredClone(ent.controls||{}):null,rotation:[...ent.rotation],supportedBy:ent.supportedBy?structuredClone(ent.supportedBy):null,restingOn:ent.restingOn?structuredClone(ent.restingOn):null}:null;
   const g={kind:hit?.kind||'orbit',hit,initial:p,last:p,moved:false,origin,
     grabWorld:hit?.world?[...hit.world]:null,pole:null,frame:null,pending:null};
+  // Hold an object briefly, then drag to rotate its whole body. A right mouse drag is immediate.
+  if((g.kind==='move-character'||g.kind==='move-asset')&&ent){
+    if(e.pointerType==='mouse'&&e.button===2){g.kind='rotate-entity';onGesture?.('rotate',hit);}
+    else g.holdTimer=setTimeout(()=>{if(gesture===g&&!g.moved&&pointers.size===1){g.kind='rotate-entity';g.holdTimer=null;onGesture?.('rotate',hit);}},340);
+  }
   if(g.kind==='pose'&&ent){const spec=limbSpec(ent,hit.target.side,hit.target.limb,skeleton);g.pole=choosePole(spec);}
   gesture=g;onGesture?.('start',hit,origin);
  };
@@ -180,10 +221,10 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   }
   if(g.kind==='multitouch')return;
   const dx=p.x-g.last.x,dy=p.y-g.last.y;g.last=p;
-  if(distance(p,g.initial)>3)g.moved=true;
+  if(distance(p,g.initial)>3){g.moved=true;clearHold(g);}
   if(g.kind==='orbit'){camera.azimuth-=dx*.0064;camera.elevation=clamp(camera.elevation+dy*.0064,-.05,1.45);return;}
   if(!g.moved||!g.hit||!g.origin)return;
-  if(g.kind==='pose')schedulePose(g,p);else if(!sceneEntity(g)?.attachedTo)originalPosition(g,p);
+  if(g.kind==='pose')schedulePose(g,p);else if(g.kind==='micro')applyMicro(g,p);else if(g.kind==='rotate-entity')applyRotation(g,p);else if(!sceneEntity(g)?.attachedTo)originalPosition(g,p);
  };
  const finish=e=>{
   if(!pointers.has(e.pointerId))return;
@@ -199,6 +240,8 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   if(pointers.size)return;
   gesture=null;
   if(g?.kind==='pose'&&g.moved){cancelFrame(g);applyPose(g,p);}
+  else if(g?.kind==='micro'){const before=g.moved;applyMicro(g,p,!g.moved);if(!before&&g.moved)g.tapMicro=true;}
+  else if(g?.kind==='rotate-entity'&&g.moved)applyRotation(g,p);
   else if(g?.moved&&g.kind!=='orbit')originalPosition(g,p,true);
   commit(g);onGesture?.('end',g?.hit);
  };
@@ -206,7 +249,8 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
  const handleBlur=()=>{cancelFrame(gesture);resetProvisional(gesture);pointers.clear();gesture=null;onGesture?.('cancel');};
  if(canvas.style)canvas.style.touchAction='none';
  canvas.addEventListener('pointerdown',begin);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',finish);
+ const preventContext=e=>e.preventDefault();canvas.addEventListener('contextmenu',preventContext);
  canvas.addEventListener('pointercancel',finish);canvas.addEventListener('wheel',wheel,{passive:false});
  globalThis.window?.addEventListener?.('blur',handleBlur);
- return {destroy(){cancelFrame(gesture);canvas.removeEventListener('pointerdown',begin);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',finish);canvas.removeEventListener('pointercancel',finish);canvas.removeEventListener('wheel',wheel);globalThis.window?.removeEventListener?.('blur',handleBlur);},active(){return !!gesture&&gesture.kind!=='orbit';}};
+ return {destroy(){cancelFrame(gesture);canvas.removeEventListener('pointerdown',begin);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',finish);canvas.removeEventListener('pointercancel',finish);canvas.removeEventListener('contextmenu',preventContext);canvas.removeEventListener('wheel',wheel);globalThis.window?.removeEventListener?.('blur',handleBlur);},active(){return !!gesture&&gesture.kind!=='orbit';}};
 }

@@ -1,4 +1,5 @@
 import {installDirectTouch} from './touch-pose.js';
+import {partMatrix,assemblyRoot,mechanismHandle,transformPoint} from './assembly.js';
 // Small dependency-free WebGL renderer. All scene objects use genuine 3D vertices,
 // camera projection, lighting and depth-testing; no CDN/build step is required.
 const rad = deg => deg*Math.PI/180;
@@ -51,6 +52,14 @@ export function capsule(rings=14,sides=40){
  }
  return {vertices:v,indices:idx};
 }
+function cone(N=36){const v=[],idx=[];for(let i=0;i<=N;i++){
+ const t=i*Math.PI*2/N,x=Math.cos(t),z=Math.sin(t),n=norm([x,1,z]);
+ v.push(x,-.5,z,...n,0,.5,0,...n);
+ }for(let i=0;i<N;i++){const j=i*2;idx.push(j,j+1,j+2,j+1,j+3,j+2);}
+ const b=v.length/6;v.push(0,-.5,0,0,-1,0);for(let i=0;i<=N;i++){const t=i*Math.PI*2/N;v.push(Math.cos(t),-.5,Math.sin(t),0,-1,0);}for(let i=0;i<N;i++)idx.push(b,b+i+2,b+i+1);return {vertices:v,indices:idx};}
+function torus(R=0.73,tube=0.27,u=48,vCount=16){const vertices=[],indices=[];
+ for(let i=0;i<=u;i++){const a=2*Math.PI*i/u;for(let j=0;j<=vCount;j++){const b=2*Math.PI*j/vCount,c=Math.cos(b),r=R+tube*c;vertices.push(r*Math.cos(a),tube*Math.sin(b),r*Math.sin(a),c*Math.cos(a),Math.sin(b),c*Math.sin(a));}}
+ for(let i=0;i<u;i++)for(let j=0;j<vCount;j++){const x=i*(vCount+1)+j,y=x+vCount+1;indices.push(x,y,x+1,y,y+1,x+1);}return {vertices,indices};}
 function between(a,b,r){const direction=norm(sub(b,a)),axis=Math.abs(direction[2])>.92?[0,1,0]:[0,0,1];const right=norm(cross(axis,direction)),forward=norm(cross(direction,right));const center=mulv(add(a,b),.5),h=length(sub(b,a));return [right[0]*r,right[1]*r,right[2]*r,0,direction[0]*h,direction[1]*h,direction[2]*h,0,forward[0]*r,forward[1]*r,forward[2]*r,0,...center,1];}
 export function characterSkeleton(e){
  const pose=e.pose||{};const pivot=.95;
@@ -95,7 +104,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
    shader=program(gl);gl.useProgram(shader);
    attrib={position:gl.getAttribLocation(shader,'aPos'),normal:gl.getAttribLocation(shader,'aNormal')};
    uniform={model:gl.getUniformLocation(shader,'uModel'),view:gl.getUniformLocation(shader,'uView'),projection:gl.getUniformLocation(shader,'uProjection'),color:gl.getUniformLocation(shader,'uColor'),alpha:gl.getUniformLocation(shader,'uAlpha')};
-   M={box:mesh(cuboid()),sphere:mesh(sphere()),cylinder:mesh(cylinder()),capsule:mesh(capsule())};
+   M={box:mesh(cuboid()),sphere:mesh(sphere()),cylinder:mesh(cylinder()),capsule:mesh(capsule()),cone:mesh(cone()),torus:mesh(torus())};
    gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);
  }
  function useCanvasFallback(reason){
@@ -110,7 +119,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
  }
 
  function mesh(m){const v=gl.createBuffer(),idx=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,v);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(m.vertices),gl.STATIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idx);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(m.indices),gl.STATIC_DRAW);return {v,idx,count:m.indices.length};}
- let world=null,selected=null,activeJoint=null,axis='flexion',mode='select';let sceneJoints={},projected=[],ghost=null;
+ let world=null,selected=null,activeJoint=null,axis='flexion',mode='select',detailMode=false;let sceneJoints={},projected=[],ghost=null;
  let alternative=null,stopped=false,lost=false,lossTimer=null,frameId=0,readyReported=false,directTouch=null;
  try{initializeGPU();}catch(err){useCanvasFallback('Gagal memulai WebGL: '+err.message);return alternative;}
  canvas.addEventListener('webglcontextlost',event=>{
@@ -176,7 +185,16 @@ export function createRenderer(canvas,overlay,callbacks={}){
      const asset=world.assets.find(a=>a.id===e.assetId);if(!asset)continue;
      const position=getEntityPosition(e);
      const base=chain(translate(...position),rotY(e.rotation?.[1]||0),rotX(e.rotation?.[0]||0),rotZ(e.rotation?.[2]||0));
-     const visual=stateVisual(world,e,asset);for(const part of asset.parts){const size=part.size.map(v=>v*(visual.scale||1));draw(part.shape,chain(base,translate(...part.position),scale(...size)),visual.color||part.color);}
+     const visual=stateVisual(world,e,asset);
+     for(const part of asset.parts){
+       const local=partMatrix(asset,e,part),partWorld=multiply(base,local),size=part.size.map(v=>v*(visual.scale||1));
+       if(part.shape==='tube'){
+         for(let k=1;k<part.points.length;k++)draw('capsule',between(pt(partWorld,part.points[k-1]),pt(partWorld,part.points[k]),size[0]),visual.color||part.color);
+       }else draw(part.shape,chain(partWorld,scale(...size)),visual.color||part.color);
+     }
+     if(selected===e.id&&detailMode)for(const m of asset.mechanisms||[]){const hp=mechanismHandle(asset,e,m,position);
+       draw('sphere',chain(translate(...hp),scale(.065,.065,.065)),'#648bca',.95);
+     }
      projected.push({entityId:e.id,screen:project(position),world:position});
      if(selected===e.id){draw('sphere',chain(translate(...position),scale(.105,.105,.105)),'#2cbbc0',.85);}
    }
@@ -190,21 +208,23 @@ export function createRenderer(canvas,overlay,callbacks={}){
    catch(err){useCanvasFallback('Renderer WebGL gagal: '+err.message);callbacks.onRendererError?.(err);}
  }
  function renderMarkers(){const markers=projected.filter(p=>p.joint&&p.joint===activeJoint&&p.screen.visible&&p.screen.z<1);let map=new Map();for(const p of markers){const id=p.entityId+'-'+p.joint;let el=overlay.querySelector(`[data-marker="${id}"]`);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${p.screen.x}px,${p.screen.y}px)`;el.classList.toggle('active',activeJoint===p.joint);map.set(id,1);}for(const el of overlay.children){if(!map.has(el.dataset.marker))el.remove();}}
- directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:getEntityPosition,camera,
+ directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:getEntityPosition,camera,getDetailSelection:()=>detailMode?selected:null,
   onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
   onPreview(entity,hit,g){if(ghost&&entity.id===ghost.entityId&&!g?.cancelled)ghost.visible=true;if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position,g);},
   onCommit(ops){callbacks.onCommitOperations?.(ops);},
+  onPreviewMechanism(id,m,value){callbacks.onPreviewMechanism?.(id,m,value);},
+  onPreviewRotation(id,rotation){callbacks.onPreviewRotation?.(id,rotation);},
   onGesture(state,hit){if(state==='start'&&hit?.kind!=='move-asset'){const e=world?.scene.entities.find(x=>x.id===hit?.entityId);ghost=e?.type==='character'?{entityId:e.id,pose:structuredClone(e.pose),position:[...e.position],visible:false}:null;}else if(['end','cancel','camera'].includes(state))ghost=null;callbacks.onGesture?.(state,hit);}
  });
  frameId=requestAnimationFrame(render);
- return {setWorld(v){world=v;alternative?.setWorld(v);},setSelected(id,joint=null){selected=id;activeJoint=joint;alternative?.setSelected(id,joint);},setAxis(x){axis=x;alternative?.setAxis(x);},setMode(x){mode=x;alternative?.setMode(x);},resetCamera(){if(alternative)return alternative.resetCamera();Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){if(alternative)return alternative.focusEntity(id);if(!world)return;const e=world.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=[...e.position];camera.target[1]+=.9;camera.distance=3.6;},project(p){return alternative?alternative.project(p):project(p);},getJointWorld(id,name){return alternative?alternative.getJointWorld(id,name):sceneJoints[id]?.[name]||null;},getObjectWorldPosition(id){if(alternative)return alternative.getObjectWorldPosition(id);const e=world?.scene.entities.find(x=>x.id===id);return e?getEntityPosition(e):null;},getBackend(){return alternative?'canvas2d':'webgl';},stop(){stopped=true;cancelAnimationFrame(frameId);directTouch?.destroy();}};
+ return {setWorld(v){world=v;alternative?.setWorld(v);},setSelected(id,joint=null){selected=id;activeJoint=joint;alternative?.setSelected(id,joint);},setAxis(x){axis=x;alternative?.setAxis(x);},setMode(x){mode=x;alternative?.setMode(x);},resetCamera(){if(alternative)return alternative.resetCamera();Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){if(alternative)return alternative.focusEntity(id);if(!world)return;const e=world.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=[...e.position];camera.target[1]+=.9;camera.distance=3.6;},project(p){return alternative?alternative.project(p):project(p);},getJointWorld(id,name){return alternative?alternative.getJointWorld(id,name):sceneJoints[id]?.[name]||null;},getObjectWorldPosition(id){if(alternative)return alternative.getObjectWorldPosition(id);const e=world?.scene.entities.find(x=>x.id===id);return e?getEntityPosition(e):null;},focusDetail(id){if(alternative)return alternative.focusDetail(id);const e=world?.scene.entities.find(x=>x.id===id);if(!e||e.type!=='asset')return;const def=world.assets.find(x=>x.id===e.assetId);const span=Math.max(.35,...(def?.parts||[]).flatMap(part=>part.size));camera.target=add(getEntityPosition(e),[0,Math.min(.25,span*.2),0]);camera.distance=clamp(span*3.2,2.1,5);},getBackend(){return alternative?'canvas2d':'webgl';},setDetailMode(v){detailMode=!!v;alternative?.setDetailMode?.(v);},stop(){stopped=true;cancelAnimationFrame(frameId);directTouch?.destroy();}};
 }
 
 // Graceful projected-3D Canvas fallback for devices that disable WebGL.
 // The canonical scene remains 3D (XYZ + joint transforms), but visual quality is reduced.
 function createFallbackRenderer(canvas,overlay,callbacks={}){
  const ctx=canvas.getContext('2d');if(!ctx)throw Error('Browser tidak menyediakan Canvas 2D/WebGL');
- let world=null,selected=null,activeJoint=null,axis='flexion',mode='select',projected=[],jointWorld={},ghost=null;
+ let world=null,selected=null,activeJoint=null,axis='flexion',mode='select',detailMode=false,projected=[],jointWorld={},ghost=null;
  let baseDistance=cameraDefaultDistance(canvas);
  const camera={azimuth:.65,elevation:.45,distance:baseDistance,target:[-.35,1,0]};
  window.addEventListener('resize',()=>{const next=cameraDefaultDistance(canvas);camera.distance=clamp(camera.distance*next/baseDistance,2.1,16);baseDistance=next;});
@@ -245,7 +265,14 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
      for(const p of Object.values(sk.joints))projected.push({entityId:e.id,screen:project(p)});
    };
    for(const e of entities.filter(e=>e.type==='character'&&!e.supportedBy))paintCharacter(e);
-   for(const e of entities.filter(e=>e.type==='asset')){const asset=world.assets.find(a=>a.id===e.assetId);if(!asset)continue;const p=resolveWorld(e);const matrix=chain(translate(...p),rotY(e.rotation?.[1]||0));const visual=stateVisual(world,e,asset);for(const part of asset.parts){const at=pt(matrix,part.position),size=part.size.map(x=>x*(visual.scale||1)),clr=visual.color||part.color;if(part.shape==='box'){box3d(chain(matrix,translate(...part.position)),size,clr);}else if(part.shape==='sphere'){circle(at,Math.max(...size)*.55,clr);}else{line(pt(chain(matrix,translate(...part.position)),[0,-size[1]/2,0]),pt(chain(matrix,translate(...part.position)),[0,size[1]/2,0]),clamp(size[0]*180/camera.distance,3,28),clr);}}
+   for(const e of entities.filter(e=>e.type==='asset')){const asset=world.assets.find(a=>a.id===e.assetId);if(!asset)continue;const p=resolveWorld(e);const matrix=chain(translate(...p),rotY(e.rotation?.[1]||0),rotX(e.rotation?.[0]||0),rotZ(e.rotation?.[2]||0));const visual=stateVisual(world,e,asset);
+    for(const part of asset.parts){const pm=multiply(matrix,partMatrix(asset,e,part)),at=pt(pm),size=part.size.map(x=>x*(visual.scale||1)),clr=visual.color||part.color;
+      if(part.shape==='box')box3d(pm,size,clr);
+      else if(part.shape==='sphere'||part.shape==='torus')circle(at,Math.max(...size)*.55,clr);
+      else if(part.shape==='tube')for(let k=1;k<part.points.length;k++)line(pt(pm,part.points[k-1]),pt(pm,part.points[k]),clamp(size[0]*330/camera.distance,3,20),clr);
+      else line(pt(pm,[0,-size[1]/2,0]),pt(pm,[0,size[1]/2,0]),clamp(size[0]*180/camera.distance,3,28),clr);
+    }
+    if(detailMode&&selected===e.id)for(const m of asset.mechanisms||[])circle(mechanismHandle(asset,e,m,p),.068,'#648bca','#476a9a');
      projected.push({entityId:e.id,screen:project(p)});if(selected===e.id)circle(p,.11,'#51d3c5','#187c88');
    }
    // Canvas2D has no depth buffer. Draw a character known to be resting on
@@ -255,12 +282,14 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
    const known=new Set();for(const v of projected.filter(x=>x.joint&&x.joint===activeJoint&&x.screen.visible)){const id=v.entityId+'-'+v.joint;known.add(id);let el=[...overlay.children].find(el=>el.dataset.marker===id);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${v.screen.x}px,${v.screen.y}px)`;el.classList.toggle('active',v.joint===activeJoint);}for(const el of [...overlay.children])if(!known.has(el.dataset.marker))el.remove();
  }
  requestAnimationFrame(render);}
- const directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:resolveWorld,camera,
+ const directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:resolveWorld,camera,getDetailSelection:()=>detailMode?selected:null,
   onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
   onPreview(entity,hit,g){if(ghost&&entity.id===ghost.entityId)ghost.visible=true;if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position,g);},
   onCommit(ops){callbacks.onCommitOperations?.(ops);},
+  onPreviewMechanism(id,m,value){callbacks.onPreviewMechanism?.(id,m,value);},
+  onPreviewRotation(id,rotation){callbacks.onPreviewRotation?.(id,rotation);},
   onGesture(state,hit){if(state==='start'&&hit?.kind!=='move-asset'){const e=world?.scene.entities.find(x=>x.id===hit?.entityId);ghost=e?.type==='character'?{entityId:e.id,pose:structuredClone(e.pose),position:[...e.position],visible:false}:null;}else if(['end','cancel','camera'].includes(state))ghost=null;callbacks.onGesture?.(state,hit);}
  });
  requestAnimationFrame(render);
- return {setWorld(v){world=v;},setSelected(id,joint=null){selected=id;activeJoint=joint;},setAxis(v){axis=v;},setMode(v){mode=v;},resetCamera(){Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){const e=world?.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=add(e.position,[0,.9,0]);camera.distance=3.5;},project,getJointWorld(id,name){return jointWorld[id]?.[name]||null;},getObjectWorldPosition(id){const e=world?.scene.entities.find(x=>x.id===id);return e?resolveWorld(e):null;},getBackend(){return 'canvas2d';},stop(){fallbackRunning=false;directTouch.destroy();}};
+ return {setWorld(v){world=v;},setSelected(id,joint=null){selected=id;activeJoint=joint;},setAxis(v){axis=v;},setMode(v){mode=v;},resetCamera(){Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){const e=world?.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=add(e.position,[0,.9,0]);camera.distance=3.5;},project,getJointWorld(id,name){return jointWorld[id]?.[name]||null;},getObjectWorldPosition(id){const e=world?.scene.entities.find(x=>x.id===id);return e?resolveWorld(e):null;},focusDetail(id){const e=world?.scene.entities.find(x=>x.id===id);if(!e||e.type!=='asset')return;const def=world.assets.find(x=>x.id===e.assetId),span=Math.max(.35,...(def?.parts||[]).flatMap(part=>part.size));camera.target=add(resolveWorld(e),[0,Math.min(.25,span*.2),0]);camera.distance=clamp(span*3.2,2.1,5);},getBackend(){return 'canvas2d';},setDetailMode(v){detailMode=!!v;},stop(){fallbackRunning=false;directTouch.destroy();}};
 }

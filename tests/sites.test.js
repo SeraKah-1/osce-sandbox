@@ -47,7 +47,7 @@ const operate=(request,session,title,revision=0)=>request('/api/operations',{
   method:'POST',user:'a',session,payload:{baseRevision:revision,operations:[{type:'rename_scene',title}]},
 });
 
-test('Sites serves v0.7 browser modules and the embedded editor with 17 MCP tools',async()=>{
+test('Sites serves v0.8 browser modules and the embedded editor with 17 MCP tools',async()=>{
   const {request}=fixture();
   assert.deepEqual((await rpc(request,'server/discover')).result.supportedVersions,['2026-07-28']);
   const tools=(await rpc(request,'tools/list')).result.tools;
@@ -63,7 +63,7 @@ test('Sites serves v0.7 browser modules and the embedded editor with 17 MCP tool
     assert.match(resource.text,/appInfo:/);
     assert.doesNotThrow(()=>new Script(resource.text.match(/<script>([\s\S]*?)<\/script>/)[1]));
   }
-  for(const script of ['touch-pose','ik3d','placement']){
+  for(const script of ['touch-pose','assembly','ik3d','placement']){
     const response=await request('/'+script+'.js');
     assert.equal(response.status,200);
     assert.match(response.headers.get('content-type'),/javascript/);
@@ -77,7 +77,7 @@ test('tablet and MCP share only the same active session and preserve archived v0
   const {request,objects}=fixture();
   const first=await create(request);
   const fresh=(await call(request,'open_studio')).structuredContent;
-  assert.equal(fresh.studioVersion,'0.7.0');
+  assert.equal(fresh.studioVersion,'0.8.0');
   assert.notEqual(first.sessionId,fresh.sessionId);
   assert.equal(first.scene.revision,0);
   assert.equal(fresh.scene.revision,0);

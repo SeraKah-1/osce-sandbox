@@ -1,6 +1,6 @@
 import {createRenderer} from './render3d.js';
 
-// OSCE Playground v0.7. All scenes are temporary and movement is local-first.
+// OSCE Playground v0.8. Temporary scenes, local-first movement, macro/micro direct manipulation.
 // In an embedded app, mutations go through the host MCP bridge; no simulated AI responses.
 const $=id=>document.getElementById(id);
 const embedded=Boolean(window.__OSCE_EMBEDDED__);
@@ -13,7 +13,7 @@ const session=(()=>{try{return sessionStorage}catch{return {getItem:()=>null,set
 
 
 const DEFAULT_COMMAND='Buat ruang latihan OSCE yang sederhana. Atur dokter dan pasien, pose awal, serta alat yang diperlukan. Gunakan OSCE Sandbox Studio MCP: baca get_world_state dan get_asset_catalog terlebih dahulu; validasi aset/perilaku baru dan panggil preview_scene_operations untuk perubahan besar; lalu terapkan perubahan dengan baseRevision yang terbaru. Jika perlu, gunakan affordances seat, bed atau surface untuk furnitur baru. Jelaskan keterbatasan simulasi klinis.';
-let data=null,selected=null,selectedJoint=null,pane=null,category='all',selectionExpanded=false;
+let data=null,selected=null,selectedJoint=null,pane=null,category='all',selectionExpanded=false,detailMode=false;
 let queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false,sessionId=null,remoteDirty=false,remoteRevision=0,eventAbort=null,sessionClosed=false;
 let lastError='',renderer,toastTimer,hostReady=false,hostKind='local',frameReady=false;
 const bridgePending=new Map();let bridgeCounter=0,bridgeOrigin='*',initialWidgetState=null,receiveInitial;
@@ -52,7 +52,7 @@ window.addEventListener('message',event=>{
 async function initializeBridge(){
  if(!embedded||hostReady||previewHost)return;
  if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}
- try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.7.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
+ try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.8.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
  catch(err){if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}if(previewHost){hostKind='local-preview';hostReady=false;return;}throw Error('Koneksi host ChatGPT belum tersedia: '+err.message);}
 }
 async function tool(name,args={}){
@@ -87,7 +87,7 @@ function setRendererStatus(kind,message){const indicator=$('rendererPill');if(ki
 function currentEntity(){return data?.scene.entities.find(e=>e.id===selected);}
 function blueprint(e){return data?.assets.find(a=>a.id===e?.assetId);}
 function behavior(e){return data?.behaviors.find(b=>b.id===blueprint(e)?.behaviorId);}
-function choose(id,joint=null){if(id!==selected)selectionExpanded=false;selected=id;selectedJoint=joint;renderer.setSelected(id,joint);renderSelection();if(pane==='objects')renderPane();}
+function choose(id,joint=null){if(id!==selected){selectionExpanded=false;detailMode=false;renderer.setDetailMode(false);$('detailHud').hidden=true;}selected=id;selectedJoint=joint;renderer.setSelected(id,joint);renderSelection();if(pane==='objects')renderPane();}
 function stopPane(){pane=null;$('sheet').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.remove('active'));renderSelection();}
 function openPane(name){if(pane===name){stopPane();return;}pane=name;$('sheet').hidden=false;$('selectionCard').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('active',x.dataset.panel===name));renderPane();}
 function friendlyJoint(name){return name.replace(/^(right|left)/,(_,s)=>s==='right'?'Kanan · ':'Kiri · ').replace('Shoulder','Bahu').replace('Elbow','Siku').replace('Wrist','Pergelangan tangan').replace('Hip','Pinggul').replace('Knee','Lutut').replace('Ankle','Pergelangan kaki').replace('neck','Leher').replace('spine','Punggung');}
@@ -95,10 +95,10 @@ function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||
  if(e.type==='character'){
   const joint=selectedJoint&&e.pose[selectedJoint]?selectedJoint:null;
   const label=joint?friendlyJoint(joint):'Seluruh tubuh';
-  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${esc(e.supportedBy?(e.supportedBy.kind==='bed'?'Berbaring':'Duduk')+' · '+label:label)} · seret boneka langsung di layar</span></div><div class="row-actions"><button class="soft-button" data-operation="rotate-left" title="Putar boneka 30 derajat ke kiri">↶ Putar</button><button class="soft-button" data-operation="rotate-right" title="Putar boneka 30 derajat ke kanan">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Tarik dada untuk memindahkan tubuh. Tarik pergelangan tangan atau kaki untuk mengatur pose. Lepaskan untuk membekukan posisi.</p>`;
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${esc(e.supportedBy?(e.supportedBy.kind==='bed'?'Berbaring':'Duduk')+' · '+label:label)} · seret boneka langsung di layar</span></div><div class="row-actions"><button class="soft-button" data-operation="rotate-left" title="Putar boneka 30 derajat ke kiri">↶ Putar</button><button class="soft-button" data-operation="rotate-right" title="Putar boneka 30 derajat ke kanan">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Tarik tubuh untuk memindahkan, tarik tangan/kaki untuk berpose. Tahan tubuh sebentar lalu geser untuk memutarnya secara bebas.</p>`;
  }else{
   const a=blueprint(e),b=behavior(e),actions=(b?.transitions||[]).filter(t=>t.from===(e.status??b?.initial));
-  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${a?.movable===false?'Objek tidak bisa dipindahkan':'Seret objek langsung untuk memindahkan'}</span></div>${Object.keys(e.parameters||{}).length?`<p class="hint">${Object.entries(e.parameters).map(([k,v])=>esc(k)+': '+esc(String(v))).join(' · ')}</p>`:''}${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}${a?.movable===false?'':`<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div>`}${(a?.affordances||[]).length?'':`<div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button></div>`}<div class="row-actions">${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${a?.movable===false?'Objek tidak bisa dipindahkan':'Seret untuk memindahkan · tahan lalu geser untuk memutar'}</span></div>${Object.keys(e.parameters||{}).length?`<p class="hint">${Object.entries(e.parameters).map(([k,v])=>esc(k)+': '+esc(String(v))).join(' · ')}</p>`:''}${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}${a?.movable===false?'':`<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div>`}${(a?.mechanisms||[]).length?`<div class="section-divider"></div><button class="primary-button" data-operation="detail-mode">${detailMode?'Selesai Detail':'🔍 Edit Detail · '+a.mechanisms.length+' bagian'}</button>${detailMode?a.mechanisms.map(m=>`<div class="mechanism-row"><span><strong>${esc(m.label)}</strong><small>${esc(m.kind)} · ${fmt(e.controls?.[m.id]??m.initial)} ${['hinge','dial'].includes(m.kind)?'°':'m'}</small></span><button class="soft-button" data-control-step="${esc(m.id)}" data-dir="-1" aria-label="Kurangi ${esc(m.label)}">−</button><button class="soft-button" data-control-step="${esc(m.id)}" data-dir="1" aria-label="Tambah ${esc(m.label)}">+</button></div>`).join(''):''}`:''}${(a?.affordances||[]).length?'':`<div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button></div>`}<div class="row-actions">${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
  }
 }
 const navTitles={add:['ADD TO WORLD','Tambah objek'],ask:['AI BUILDER','Ask ChatGPT'],practice:['PRACTICE','Latihan OSCE'],more:['WORKSPACE','Pengaturan'],objects:['SCENE TREE','Semua objek'],advanced:['ADVANCED','Asset & Behavior'],diagnostics:['CONNECTION','Status & diagnostik']};
@@ -143,7 +143,8 @@ async function updateScene(operations,{gesture=false,expectedSession}={}){
   const result=await tool('apply_scene_operations',{operations,baseRevision});
   if(expectedSession!==sessionId)return result;
   data.scene.revision=result.revision;
-  if(!gesture){await reload({force:true,quiet:true});}
+  const hasTriggeredMechanism=operations.some(op=>op.type==='set_mechanism'&&data.assets.find(a=>a.id===data.scene.entities.find(e=>e.id===op.entityId)?.assetId)?.mechanisms?.some(m=>m.id===op.mechanismId&&Object.keys(m.triggers||{}).length));
+  if(!gesture||hasTriggeredMechanism){await reload({force:true,quiet:true});}
   if(gesture)status('ok','Sesi sementara');
   clearError();return result;
  }catch(err){
@@ -230,6 +231,7 @@ async function execute(kind,payload){const e=currentEntity();try{
   case 'spawn-character':{const role=payload;const id=safeID('human');await mutate([{type:'spawn_character',id,role,name:role==='doctor'?'Dokter baru':'Pasien baru',position:role==='doctor'?[-1.7,0,1.3]:[1.1,0,1.3]}]);choose(id);stopPane();notice('Boneka ditambahkan');break;}
   case 'spawn-asset':{const a=data.assets.find(x=>x.id===payload);if(!a)throw Error('Aset tidak ada dalam katalog');const id=safeID('object');await mutate([{type:'spawn_asset',id,assetId:a.id,position:spawnPosition(a.category==='Furnitur')}]);choose(id);stopPane();notice(a.name+' ditambahkan');break;}
   case 'pose-standing':case 'pose-sitting':if(e)await mutate([{type:'apply_pose',entityId:e.id,presetId:kind.replace('pose-','')}]);break;
+  case 'detail-mode':{if(e?.type==='asset'&&blueprint(e)?.mechanisms?.length){detailMode=!detailMode;renderer.setDetailMode(detailMode);$('detailHud').hidden=!detailMode;if(detailMode)renderer.focusDetail(e.id);renderSelection();}break;}
   case 'rotate-left':case 'rotate-right':if(e){const step=kind==='rotate-left'?-Math.PI/6:Math.PI/6;await mutate([{type:'rotate_entity',entityId:e.id,rotation:[e.rotation?.[0]||0,Math.atan2(Math.sin((e.rotation?.[1]||0)+step),Math.cos((e.rotation?.[1]||0)+step)),e.rotation?.[2]||0]}]);}break;
   case 'attach-doctor':case 'attach-patient':if(e)await mutate([{type:'attach',entityId:e.id,targetId:kind.replace('attach-',''),anchor:'rightHand'}]);break;
   case 'detach':if(e)await mutate([{type:'detach',entityId:e.id}]);break;
@@ -277,10 +279,13 @@ function download(name,text){const blob=new Blob([text],{type:'application/json'
 try{renderer=createRenderer($('scene3d'),$('hotspots'),{
  onRendererStatus:setRendererStatus,onRendererError:e=>showError('Renderer bermasalah',e.message),
  onSelect(id,joint){choose(id,joint);},
+ onPreviewMechanism(id,m,value){if(selected===id){$('detailValue').textContent=`${m.label}: ${fmt(value)} ${['hinge','dial'].includes(m.kind)?'°':'m'}`;$('interactionHint').textContent='Bagian '+m.label+' · lepaskan untuk menetapkan';}},
+ onPreviewRotation(id,rotation){if(selected===id){$('selectionKicker').textContent='PUTAR OBJEK · '+Math.round(rotation[1]*180/Math.PI)+'°';$('interactionHint').textContent='Putar dengan menahan lalu menggeser jari';}},
  onPreviewPose(id,joint,pose,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MENGATUR POSE · '+friendlyJoint(joint);if(g?.reachLimit||g?.ikError>.12)$('interactionHint').textContent='Batas jangkauan sendi · tarik target lebih dekat';}},
  onPreviewPosition(id,p,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');if(g?.snap)$('interactionHint').textContent='Lepas untuk menaruh alat di '+g.snap.supportName;if(g?.characterSnap)$('interactionHint').textContent=g.characterSnap.kind==='bed'?'Lepas untuk membaringkan pasien di '+g.characterSnap.supportName:'Lepas untuk mendudukkan pasien di '+g.characterSnap.supportName;
   if(data.scene.entities.some(e=>e.supportedBy?.entityId===id||e.restingOn?.entityId===id))$('interactionHint').textContent='Geser furnitur · pasien dan alat di atasnya ikut bergerak';}},
  onGesture(phase,hit){if(phase==='start'){if(hit){selectionExpanded=false;renderSelection();}dragActive=!!hit;document.body.classList.toggle('puppet-dragging',!!hit);const attached=hit&&data?.scene?.entities.find(e=>e.id===hit.entityId)?.attachedTo;$('interactionHint').textContent=attached?'Objek terpasang · buka tindakan objek untuk melepas':hit?.kind==='pose'?'Tarik tangan/kaki · Lepas untuk membekukan':hit?'Geser objek · Lepas untuk menyimpan':'Geser ruang kosong untuk memutar kamera';}
+  if(phase==='rotate'){$('interactionHint').textContent='Putar objek · geser kanan/kiri atau atas/bawah';dragActive=true;}
   if(phase==='camera'){$('interactionHint').textContent='Pose tetap · dua jari untuk zoom dan geser kamera';dragActive=true;}
   if(phase==='end'||phase==='cancel'){dragActive=false;setTimeout(()=>{if(remoteDirty&&!dragActive&&!inFlight&&remoteRevision>(data?.scene?.revision||0)){remoteDirty=false;remoteRevision=0;reload({quiet:true}).catch(()=>{});}},80);document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
  onCommitOperations(operations){
@@ -319,8 +324,16 @@ $('sheetBody').addEventListener('change',async event=>{
  if(b.matches('[data-step]'))await mutate([{type:b.checked?'complete_step':'uncomplete_step',index:Number(b.dataset.step)}]).catch(()=>{});
 });
 $('sheetBody').addEventListener('input',event=>{if(event.target.id==='assetJSON')window.__assetDraft=event.target.value;if(event.target.id==='behaviorJSON')window.__behaviorDraft=event.target.value;if(event.target.id==='aiPrompt')window.__lastPrompt=event.target.value;});
+$('detailClose').addEventListener('click',()=>{detailMode=false;renderer.setDetailMode(false);$('detailHud').hidden=true;renderSelection();});
 $('selectionBody').addEventListener('click',async event=>{
  const b=event.target.closest('button');if(!b)return;
+ if(b.dataset.controlStep&&currentEntity()?.type==='asset'){
+   const e=currentEntity(),m=blueprint(e)?.mechanisms?.find(x=>x.id===b.dataset.controlStep);
+   if(m){const current=e.controls?.[m.id]??m.initial,unit=m.kind==='button'?m.max:(m.kind==='slider'?0.01:5);
+     const v=m.kind==='button'?(current===m.max?m.min:m.max):Math.min(m.max,Math.max(m.min,current+unit*Number(b.dataset.dir)));
+     if(v!==current)await mutate([{type:'set_mechanism',entityId:e.id,mechanismId:m.id,value:v}]).catch(()=>{});
+   }return;
+ }
  if(b.dataset.action&&currentEntity())await mutate([{type:'trigger_action',entityId:selected,action:b.dataset.action}]).catch(()=>{});
  if(b.dataset.operation)await execute(b.dataset.operation);
 });

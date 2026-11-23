@@ -8,6 +8,6 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=relative=>fs.readFileSync(path.join(root,relative),'utf8');
 
 export function widgetHTML(){
- const filenames=['index.html','styles.css','ik3d.js','placement.js','touch-pose.js','render3d.js','app.js'];
+ const filenames=['index.html','styles.css','assembly.js','ik3d.js','placement.js','touch-pose.js','render3d.js','app.js'];
  return renderWidget(Object.fromEntries(filenames.map(file=>[file,read('web/'+file)])));
 }

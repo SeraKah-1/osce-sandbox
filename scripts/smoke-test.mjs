@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 // Health + new temporary session + MCP controls the SAME session + deletion.
 // STUDIO_URL=https://... API_TOKEN=... npm run smoke
 import {WIDGET_URI} from '../server/widget.js';
@@ -12,7 +13,7 @@ const mcp=async(method,params={})=>{
  const v=await api('/mcp','POST',{jsonrpc:'2.0',id:23,method,params});
  if(v.error||v.result?.isError)throw Error(JSON.stringify(v.error||v.result));return v.result;
 };
-const health=await api('/health');if(health.persistence!==false||health.version!=='0.7.0')throw Error(`Wrong server at ${base}: expected v0.7 RAM-only sessions; got ${JSON.stringify(health)}. Set STUDIO_URL to the active v0.7 server.`);
+const health=await api('/health');if(health.persistence!==false||health.version!=='0.8.0')throw Error(`Wrong server at ${base}: expected v0.8 RAM-only sessions; got ${JSON.stringify(health)}. Set STUDIO_URL to the active v0.8 server.`);
 const start=await api('/api/session','POST',{});const id=start.sessionId;
 try{
  const list=(await mcp('tools/list')).tools;
@@ -34,5 +35,15 @@ try{
  const char=active.scene.entities.find(e=>e.id==='patient');
  if(char.supportedBy?.entityId!=='bed-1'||Math.abs(char.position[0]-3)>1e-5)throw Error('Patient must follow the moved bed');
 
- console.log(JSON.stringify({ok:true,ephemeral:true,tools:list.length,resource:WIDGET_URI,sessionId:id,revision:active.scene.revision},null,2));
+ // The same MCP session can create an articulated asset and operate its moving parts.
+ const blueprint=JSON.parse(readFileSync(new URL('../examples/articulated-demo.json',import.meta.url),'utf8'));
+ const created=(await mcp('tools/call',{name:'create_asset',arguments:{sessionId:id,...blueprint}})).structuredContent;
+ if(!created.ok)throw Error('MCP create_asset failed');
+ let rev=created.revision;
+ const spawned=(await mcp('tools/call',{name:'apply_scene_operations',arguments:{sessionId:id,baseRevision:rev,operations:[{type:'spawn_asset',id:'smoke-detail',assetId:blueprint.id,position:[0,0,1]}]}})).structuredContent;
+ rev=spawned.revision;
+ const changed=(await mcp('tools/call',{name:'apply_scene_operations',arguments:{sessionId:id,baseRevision:rev,operations:[{type:'set_mechanism',entityId:'smoke-detail',mechanismId:'lever-hinge',value:45}]}})).structuredContent;
+ const finalState=await api('/api/state','GET',undefined,{'X-Studio-Session':id});
+ if(finalState.scene.entities.find(e=>e.id==='smoke-detail')?.controls?.['lever-hinge']!==45)throw Error('MCP micro action not reflected in tablet state');
+ console.log(JSON.stringify({ok:true,ephemeral:true,tools:list.length,resource:WIDGET_URI,sessionId:id,revision:changed.revision,articulatedMechanism:45},null,2));
 }finally{await api('/api/session','DELETE',undefined,{'X-Studio-Session':id});}

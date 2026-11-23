@@ -96,7 +96,7 @@ function sessionEvents(sessions,id,signal,revision){
 async function studioApi(request,pathname,bucket,identity,context) {
   if (!identity) throw missingIdentity();
   const route=request.method+' '+pathname;
-  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'0.7.0'});
+  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'0.8.0'});
   const sessions=new SiteSessions(bucket,identity);
   if (route==='POST /api/session') return json(await startSession(sessions,context),201);
   if (route==='POST /api/save') return json({error:'Sesi sementara: penyimpanan permanen dinonaktifkan.'},410);
@@ -149,7 +149,7 @@ export default {
     const pathname=url.pathname;
     const identity=request.headers.get('oai-authenticated-user-id');
     try {
-      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.7.0',persistentProjects:false},env.STUDIO?200:503);
+      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.8.0',persistentProjects:false},env.STUDIO?200:503);
       if (pathname==='/mcp' || pathname.startsWith('/api/')) {
         const origin=request.headers.get('Origin');
         if (origin && origin!==url.origin) throw new SceneError('Origin tidak diizinkan.','FORBIDDEN',403);
