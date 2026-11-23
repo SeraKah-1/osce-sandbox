@@ -3,7 +3,7 @@ import {rpc, toolsList} from './mcp-protocol.js';
 import {renderWidget} from './widget-template.js';
 import assets from './assets.js';
 
-const widget = renderWidget(assets['index.html'], assets['styles.css'], assets['render3d.js'], assets['app.js']);
+const widget = renderWidget(assets['index.html'], assets['styles.css'], assets['render3d.js'], assets['app.js'], assets['touch-pose.js']);
 const mime = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
@@ -86,7 +86,7 @@ async function control(request,bucket,identity) {
 
 async function studioApi(request,pathname,bucket,identity) {
   if (!identity) throw missingIdentity();
-  if (request.method==='GET' && pathname==='/api/connection') return json({toolCount:toolsList.length,version:'0.3.0'});
+  if (request.method==='GET' && pathname==='/api/connection') return json({toolCount:toolsList.length,version:'0.4.0'});
   const project=await openProject(bucket,identity);
   const {studio}=project;
   const method=request.method;
@@ -132,7 +132,7 @@ export default {
     const pathname=url.pathname;
     const identity=request.headers.get('oai-authenticated-user-id');
     try {
-      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.3.0'},env.STUDIO?200:503);
+      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.4.0'},env.STUDIO?200:503);
       if (pathname==='/mcp' || pathname.startsWith('/api/')) {
         const origin=request.headers.get('Origin');
         if (origin && origin!==url.origin) throw new SceneError('Origin tidak diizinkan.','FORBIDDEN',403);

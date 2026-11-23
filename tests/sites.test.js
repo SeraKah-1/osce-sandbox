@@ -49,6 +49,10 @@ test('Sites discovers all 18 tools and provides the real MCP Apps resource',asyn
   assert.match(resource.text,/ui\/initialize/);
   assert.match(resource.text,/OSCE Playground/);
   assert.match(resource.text,/appInfo:/);
+  assert.match(resource.text,/function installDirectTouch/);
+  const renderer=await request('/touch-pose.js');
+  assert.equal(renderer.status,200);
+  assert.match(renderer.headers.get('content-type'),/javascript/);
   assert.doesNotThrow(()=>new Script(resource.text.match(/<script>([\s\S]*?)<\/script>/)[1]));
   assert.match(resource.text,/createRenderer/);
   assert.equal((await rpc(request,'tools/call',{name:'open_studio'})).result.isError,true);
@@ -106,7 +110,7 @@ test('v0.2 projects keep assets and history while upgrading the built-in instrum
   const request=fixture(saved);
   const fromPlugin=(await rpc(request,'tools/call',{name:'open_studio'},'a')).result.structuredContent;
   const fromBrowser=await (await request('/api/state',{user:'a'})).json();
-  assert.equal(fromPlugin.studioVersion,'0.3.0');
+  assert.equal(fromPlugin.studioVersion,'0.4.0');
   assert.equal(fromBrowser.scene.title,'Previous project');
   assert.deepEqual(fromPlugin.scene,fromBrowser.scene);
   assert.deepEqual(fromBrowser.assets,saved.assets);

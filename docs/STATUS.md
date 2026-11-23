@@ -1,3 +1,5 @@
+**Version 0.4.0 touch control release.** Read `QA-V04.md` for evidence, tests, and unverified physical-device behavior. Hosted ChatGPT Site remains independent and may still run an older version.
+
 # Status verifikasi v0.3 — 23 November 2026
 
 ## Terimplementasi dan diuji

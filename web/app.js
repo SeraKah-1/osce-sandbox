@@ -1,6 +1,6 @@
 import {createRenderer} from './render3d.js';
 
-// OSCE Playground v0.3. The same UI runs as a standalone site and an MCP App.
+// OSCE Playground v0.4. The same UI runs as a standalone site and an MCP App.
 // In an embedded app, mutations go through the host MCP bridge; no simulated AI responses.
 const $=id=>document.getElementById(id);
 const embedded=Boolean(window.__OSCE_EMBEDDED__);
@@ -12,9 +12,11 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=n=>Number(n||0).toFixed(2);
 const session=(()=>{try{return sessionStorage}catch{return {getItem:()=>null,setItem:()=>{}}}})();
 const storage=(()=>{try{return embedded ? sessionStorage : localStorage}catch{return {getItem:()=>null,setItem:()=>{},removeItem:()=>{}}}})();
-const DRAFT_KEY='osce-playground-v03-draft'+(hosted ? ':'+draftScope : '');
+const draftSuffix=hosted ? ':'+draftScope : '';
+const DRAFT_KEY='osce-playground-v04-draft'+draftSuffix;
+const LEGACY_DRAFT_KEY='osce-playground-v03-draft'+draftSuffix;
 const DEFAULT_COMMAND='Buat ruang latihan OSCE yang sederhana. Atur dokter dan pasien, pose awal, serta alat yang diperlukan. Gunakan OSCE Sandbox Studio MCP: baca get_world_state dan get_asset_catalog terlebih dahulu; validasi aset/perilaku baru dan panggil preview_scene_operations untuk perubahan besar; lalu terapkan perubahan dengan baseRevision yang terbaru. Jelaskan keterbatasan simulasi klinis.';
-let data=null,selected=null,selectedJoint=null,axis='flexion',pane=null,category='all',moveMode=false;
+let data=null,selected=null,selectedJoint=null,axis='flexion',pane=null,category='all',selectionExpanded=false;
 let pending=[],pendingRevision=null,draft=null,queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false;
 let lastError='',renderer,toastTimer,hostReady=false,hostKind='local',frameReady=false;
 const bridgePending=new Map();let bridgeCounter=0, bridgeOrigin='*';
@@ -26,8 +28,8 @@ function clearError(){$('errorBar').hidden=true;lastError='';}
 function showLoading(message='Memuat scene'){$('loadingOverlay').hidden=false;$('loadingDetail').textContent=message;$('retryLoad').hidden=true;}
 function hideLoading(){$('loadingOverlay').hidden=true;}
 function loadingFailure(err){$('loadingDetail').textContent=err;$('retryLoad').hidden=false;status('error','Offline');}
-function getDraft(){try{const d=JSON.parse(storage.getItem(DRAFT_KEY)||'null');return d?.snapshot?.scene&&Array.isArray(d.operations)?d:null;}catch{return null;}}
-function storeDraft(){try{if(!pending.length){storage.removeItem(DRAFT_KEY);return;}storage.setItem(DRAFT_KEY,JSON.stringify({baseRevision:pendingRevision,operations:pending,snapshot:data,savedAt:new Date().toISOString()}));}catch{showError('Penyimpanan lokal diblokir','Browser tidak mengizinkan penyimpanan draft. Ekspor cadangan sebelum menutup tab.');}}
+function getDraft(){try{const d=JSON.parse(storage.getItem(DRAFT_KEY)||storage.getItem(LEGACY_DRAFT_KEY)||'null');return d?.snapshot?.scene&&Array.isArray(d.operations)?d:null;}catch{return null;}}
+function storeDraft(){try{if(!pending.length){storage.removeItem(DRAFT_KEY);storage.removeItem(LEGACY_DRAFT_KEY);return;}storage.setItem(DRAFT_KEY,JSON.stringify({baseRevision:pendingRevision,operations:pending,snapshot:data,savedAt:new Date().toISOString()}));}catch{showError('Penyimpanan lokal diblokir','Browser tidak mengizinkan penyimpanan draft. Ekspor cadangan sebelum menutup tab.');}}
 function parseHostResponse(raw){const result=raw?.result??raw;if(result?.isError){const text=result.content?.find(x=>x.type==='text')?.text||'Perintah MCP gagal';let value;try{value=JSON.parse(text);}catch{}throw Object.assign(Error(value?.error||value?.message||text),{code:value?.code});}if(result?.structuredContent)return result.structuredContent;if(result?.content?.[0]?.text){try{return JSON.parse(result.content[0].text)}catch{}}return result;}
 function apiHeaders(){const h={'Content-Type':'application/json'};const t=hosted?null:session.getItem('osce-studio-token');if(t)h.Authorization='Bearer '+t;return h;}
 async function api(path,method='GET',payload){const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),12000);try{const res=await fetch(path,{method,headers:apiHeaders(),body:payload===undefined?undefined:JSON.stringify(payload),signal:ctrl.signal});const out=await res.json().catch(()=>({error:`HTTP ${res.status}`}));if(!res.ok)throw Object.assign(Error(out.error||`HTTP ${res.status}`),{code:out.code,status:res.status});return out;}catch(e){if(e.name==='AbortError')throw Object.assign(Error('Server tidak merespons (12 detik). Perubahan mungkin sudah diproses; sinkronkan sebelum mengulang.'),{code:'TIMEOUT'});throw e;}finally{clearTimeout(timer)}}
@@ -35,7 +37,7 @@ function hostRpc(method,params,timeout=7000){return new Promise((resolve,reject)
 window.addEventListener('message',event=>{
  if(!embedded||event.source!==window.parent||(bridgeOrigin!=='*'&&event.origin!==bridgeOrigin))return;
  const message=event.data;if(message?.jsonrpc!=='2.0')return;
- if(message.method==='ui/notifications/tool-result'&&message.params?.structuredContent?.scene&&renderer&&!pending.length){
+ if(message.method==='ui/notifications/tool-result'&&message.params?.structuredContent?.scene&&renderer&&!pending.length&&!dragActive){
    const next=message.params.structuredContent;
    if(!data||next.scene.revision>data.scene.revision)applyData(next);
    return;
@@ -51,7 +53,7 @@ window.addEventListener('message',event=>{
 async function initializeBridge(){
  if(!embedded || hostReady || previewHost)return;
  if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}
- try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.3.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
+ try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.4.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
  catch(err){if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}if(previewHost){hostKind='local-preview';hostReady=false;return;}throw Error('Koneksi host ChatGPT belum tersedia: '+err.message);}
 }
 async function tool(name,args={}){
@@ -86,19 +88,18 @@ function setRendererStatus(kind,message){const indicator=$('rendererPill');if(ki
 function currentEntity(){return data?.scene.entities.find(e=>e.id===selected);}
 function blueprint(e){return data?.assets.find(a=>a.id===e?.assetId);}
 function behavior(e){return data?.behaviors.find(b=>b.id===blueprint(e)?.behaviorId);}
-function choose(id,joint=null){selected=id;selectedJoint=joint;renderer.setSelected(id,joint);renderSelection();if(pane==='objects')renderPane();}
+function choose(id,joint=null){if(id!==selected)selectionExpanded=false;selected=id;selectedJoint=joint;renderer.setSelected(id,joint);renderSelection();if(pane==='objects')renderPane();}
 function stopPane(){pane=null;$('sheet').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.remove('active'));renderSelection();}
 function openPane(name){if(pane===name){stopPane();return;}pane=name;$('sheet').hidden=false;$('selectionCard').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('active',x.dataset.panel===name));renderPane();}
 function friendlyJoint(name){return name.replace(/^(right|left)/,(_,s)=>s==='right'?'Kanan · ':'Kiri · ').replace('Shoulder','Bahu').replace('Elbow','Siku').replace('Wrist','Pergelangan tangan').replace('Hip','Pinggul').replace('Knee','Lutut').replace('Ankle','Pergelangan kaki').replace('neck','Leher').replace('spine','Punggung');}
-function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||pane){el.hidden=true;return;}el.hidden=false;$('selectionName').textContent=e.name;$('selectionKicker').textContent=e.type==='character'?'BONEKA · '+(e.role==='doctor'?'DOKTER':'PASIEN'):'OBJEK · '+(e.status||'BEBAS');
+function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||pane){el.hidden=true;return;}el.hidden=false;el.classList.toggle('compact',!selectionExpanded);$('selectionExpand').setAttribute('aria-expanded',String(selectionExpanded));$('selectionName').textContent=e.name;$('selectionKicker').textContent=e.type==='character'?'BONEKA · '+(e.role==='doctor'?'DOKTER':'PASIEN'):'OBJEK · '+(e.status||'BEBAS');
  if(e.type==='character'){
-  const j=selectedJoint&&e.pose[selectedJoint]?selectedJoint:'rightShoulder';selectedJoint=j;
-  const props=Object.keys(e.pose[j]||{});if(!props.includes(axis))axis=props[0]||'flexion';renderer.setAxis(axis);
-  const angle=e.pose[j]?.[axis]??0;
-  $('selectionBody').innerHTML=`<label class="label-small" for="jointPicker">Sendi</label><select class="field" id="jointPicker" aria-label="Pilih sendi">${Object.keys(e.pose).map(x=>`<option value="${esc(x)}" ${x===j?'selected':''}>${esc(friendlyJoint(x))}</option>`).join('')}</select><div class="label-small">Arah gerak <span id="jointReadout">${fmt(angle)}°</span></div><div class="pill-list">${props.map(x=>`<button class="chip ${x===axis?'active':''}" type="button" data-axis="${esc(x)}">${esc(x)}</button>`).join('')}</div><input class="range" type="range" id="jointRange" min="-180" max="180" step="1" value="${Number(angle)}" aria-label="Sudut sendi"><div class="row-actions"><button class="soft-button" data-operation="joint-reset">Reset sendi</button><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Sentuh titik sendi biru pada boneka untuk mengedit langsung. Nilai sudut adalah kontrol visual, bukan pengukuran klinis.</p>`;
+  const joint=selectedJoint&&e.pose[selectedJoint]?selectedJoint:null;
+  const label=joint?friendlyJoint(joint):'Seluruh tubuh';
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${esc(label)} · seret boneka langsung di layar</span></div><div class="row-actions"><button class="soft-button" data-operation="rotate-left" title="Putar boneka 30 derajat ke kiri">↶ Putar</button><button class="soft-button" data-operation="rotate-right" title="Putar boneka 30 derajat ke kanan">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Tarik dada untuk memindahkan tubuh. Tarik pergelangan tangan atau kaki untuk mengatur pose. Lepaskan untuk membekukan posisi.</p>`;
  }else{
   const b=behavior(e),actions=(b?.transitions||[]).filter(t=>t.from===(e.status??b?.initial));
-  $('selectionBody').innerHTML=`<div class="label-small">${esc(blueprint(e)?.category||'Objek')} <span>${esc(e.attachedTo?'Terpasang · '+e.attachedTo:e.status||'Bebas')}</span></div>${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}<div class="row-actions"><button class="soft-button" data-operation="move">${icon('move')} ${moveMode?'Selesai geser':'Geser objek'}</button><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button>${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><label class="label-small" for="rotateRange">Rotasi <span id="rotateReadout">${Math.round(e.rotation[1]*180/Math.PI)}°</span></label><input class="range" type="range" id="rotateRange" min="-180" max="180" step="5" value="${Math.round(e.rotation[1]*180/Math.PI)}"><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>Seret objek untuk memindahkan</span></div>${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button>${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
  }
 }
 const navTitles={add:['ADD TO WORLD','Tambah objek'],ask:['AI BUILDER','Ask ChatGPT'],practice:['PRACTICE','Latihan OSCE'],more:['WORKSPACE','Pengaturan'],objects:['SCENE TREE','Semua objek'],advanced:['ADVANCED','Asset & Behavior'],diagnostics:['CONNECTION','Status & diagnostik']};
@@ -129,15 +130,30 @@ function renderPane(){if(!pane)return;
  }
  $('sheetBody').innerHTML=html;
 }
-function offlineEligible(ops){return ops.length===1&&['set_joint','move_entity','rotate_entity'].includes(ops[0].type);}
+function offlineEligible(ops){
+ if(!ops.length||ops.length>12)return false;
+ if(ops.length===1)return ['set_joint','move_entity','rotate_entity'].includes(ops[0].type);
+ return ops.every(op=>op.type==='set_joint'&&op.entityId===ops[0].entityId);
+}
+function appendOffline(ops,baseRevision){
+ if(pendingRevision===null)pendingRevision=baseRevision;
+ // Last-write-wins coalescing keeps lengthy stop-motion sessions under the server's 50-op transaction limit.
+ const combined=new Map();
+ for(const op of [...pending,...ops]){
+  const k=op.type==='set_joint'?`joint:${op.entityId}:${op.joint}:${op.axis}`:`${op.type}:${op.entityId}`;
+  combined.set(k,op);
+ }
+ if(combined.size>50)throw Error('Draft terlalu besar. Hubungkan kembali atau ekspor proyek sebelum melanjutkan.');
+ pending=[...combined.values()];storeDraft();status('error',`Offline · ${pending.length} perubahan`);
+}
 async function updateScene(operations,options={}){
  if(!data)throw Error('Scene belum dimuat');
- if(pending.length){if(offlineEligible(operations)){pending.push(...operations);storeDraft();status('error',`Offline · ${pending.length} perubahan`);return {queued:true};}throw Error('Masih ada perubahan offline. Sinkronkan terlebih dahulu sebelum menambah objek.');}
- const baseRevision=data.scene.revision;inFlight++;status('pending','Menyimpan…');
+ if(pending.length){if(offlineEligible(operations)){appendOffline(operations,pendingRevision);return {queued:true};}throw Error('Masih ada perubahan offline. Sinkronkan terlebih dahulu sebelum menambah objek.');}
+ const baseRevision=options.baseRevision??data.scene.revision;inFlight++;status('pending','Menyimpan…');
  try{const result=await tool('apply_scene_operations',{operations,baseRevision});await reload({force:true});clearError();status('ok',`Tersinkron · r${data.scene.revision}`);return result;}
  catch(err){
   if((err.code==='TIMEOUT'||err.name==='TypeError'||/fetch|network|Failed to fetch/i.test(err.message))&&offlineEligible(operations)){
-   pendingRevision=baseRevision;pending.push(...operations);storeDraft();status('error',`Offline · ${pending.length} perubahan`);showError('Belum tersinkron','Perubahan pose tersimpan sebagai draft lokal. Sinkronkan sebelum menutup atau memuat ulang.');return {queued:true};
+   appendOffline(operations,baseRevision);showError('Belum tersinkron','Perubahan pose tersimpan sebagai draft lokal. Sinkronkan sebelum menutup atau memuat ulang.');return {queued:true};
   }
   if(!pending.length)await reload({force:true,quiet:true}).catch(()=>{});
   status('error','Perlu diperiksa');showError(err.code==='REVISION_CONFLICT'?'Scene berubah di tempat lain':'Perubahan gagal',err.message);throw err;
@@ -146,12 +162,13 @@ async function updateScene(operations,options={}){
 function mutate(ops,options){const task=queue.then(()=>updateScene(ops,options));queue=task.catch(()=>{});return task;}
 async function reload({quiet=false,force=false}={}){
  if(refreshLock){if(!force)return;while(refreshLock)await new Promise(resolve=>setTimeout(resolve,25));}
- if(inFlight>0&&!force)return;
+ if((inFlight>0||dragActive)&&!force)return;
  refreshLock=true;try{
   const latest=await tool('get_world_state');
+  if(dragActive)return;
   if(pending.length){if(latest.scene.revision!==pendingRevision){status('error','Konflik perubahan');showError('Perubahan bersamaan','Scene server sudah berubah sejak draft dibuat. Ekspor draft sebelum memutuskan pemulihan; sistem tidak akan menimpa data orang lain.');return;}
     const result=await tool('apply_scene_operations',{baseRevision:pendingRevision,operations:pending});if(!result.ok)throw Error(result.error||'Sinkronisasi draft gagal');pending=[];pendingRevision=null;storeDraft();const committed=await tool('get_world_state');applyData(committed);
-  }else if(!quiet||!data||latest.scene.revision!==data.scene.revision)applyData(latest);
+  }else if(force||!quiet||!data||latest.scene.revision!==data.scene.revision)applyData(latest);
   else status('ok',`Tersinkron · r${data.scene.revision}`);
   if(!frameReady){$('loadingDetail').textContent='Menyiapkan 3D…';setTimeout(()=>{if(!frameReady&&data){$('loadingDetail').textContent='GPU sedang menyiapkan tampilan…';}},600);}
   else hideLoading();if(!quiet)clearError();
@@ -166,7 +183,7 @@ async function execute(kind,payload){const e=currentEntity();try{
   case 'spawn-asset':{const a=data.assets.find(x=>x.id===payload);if(!a)throw Error('Aset tidak ada dalam katalog');const id=safeID('object');await mutate([{type:'spawn_asset',id,assetId:a.id,position:spawnPosition(a.category==='Furnitur')}]);choose(id);stopPane();notice(a.name+' ditambahkan');break;}
   case 'joint-reset':if(e&&selectedJoint)await mutate([{type:'set_joint',entityId:e.id,joint:selectedJoint,axis,angle:0}]);break;
   case 'pose-standing':case 'pose-sitting':if(e)await mutate([{type:'apply_pose',entityId:e.id,presetId:kind.replace('pose-','')}]);break;
-  case 'move':if(!e)return;moveMode=!moveMode;renderer.setMode(moveMode?'move':'select');renderSelection();notice(moveMode?'Seret objek untuk menggeser. Tekan “Selesai geser” setelah selesai.':'Mode geser selesai');break;
+  case 'rotate-left':case 'rotate-right':if(e){const step=kind==='rotate-left'?-Math.PI/6:Math.PI/6;await mutate([{type:'rotate_entity',entityId:e.id,rotation:[e.rotation?.[0]||0,Math.atan2(Math.sin((e.rotation?.[1]||0)+step),Math.cos((e.rotation?.[1]||0)+step)),e.rotation?.[2]||0]}]);}break;
   case 'attach-doctor':case 'attach-patient':if(e)await mutate([{type:'attach',entityId:e.id,targetId:kind.replace('attach-',''),anchor:'rightHand'}]);break;
   case 'detach':if(e)await mutate([{type:'detach',entityId:e.id}]);break;
   case 'duplicate':if(e?.type==='asset'){const id=safeID('copy');await mutate([{type:'spawn_asset',id,assetId:e.assetId,position:[e.position[0]+.25,e.position[1],e.position[2]+.25],rotation:e.rotation}]);choose(id);}break;
@@ -217,10 +234,13 @@ function download(name,text){const blob=new Blob([text],{type:'application/json'
 try{renderer=createRenderer($('scene3d'),$('hotspots'),{
  onRendererStatus:setRendererStatus,onRendererError:e=>showError('Renderer bermasalah',e.message),
  onSelect(id,joint){choose(id,joint);},
- onPreviewJoint(id,joint,which,value){const output=$('jointReadout');if(output&&selected===id&&selectedJoint===joint)output.textContent=value+'°';const range=$('jointRange');if(range&&selected===id&&selectedJoint===joint)range.value=value;},
- onPreviewPosition(id,p){if(selected===id)$('selectionKicker').textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');},
- onCommitJoint(id,joint,which,value){mutate([{type:'set_joint',entityId:id,joint,axis:which,angle:value}]).catch(()=>{});},
- onCommitPosition(id,position){mutate([{type:'move_entity',entityId:id,position}]).catch(()=>{});}
+ onPreviewPose(id,joint,pose,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MENGATUR POSE · '+friendlyJoint(joint);if(g?.ikError>24)$('interactionHint').textContent='Batas jangkauan tercapai · putar kamera atau tarik lebih dekat';}},
+ onPreviewPosition(id,p){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');}},
+ onGesture(phase,hit){if(phase==='start'){if(hit){selectionExpanded=false;renderSelection();}dragActive=!!hit;document.body.classList.toggle('puppet-dragging',!!hit);const attached=hit&&data?.scene?.entities.find(e=>e.id===hit.entityId)?.attachedTo;$('interactionHint').textContent=attached?'Objek terpasang · buka tindakan objek untuk melepas':hit?.kind==='pose'?'Tarik tangan/kaki · Lepas untuk membekukan':hit?'Geser objek · Lepas untuk menyimpan':'Geser ruang kosong untuk memutar kamera';}
+  if(phase==='camera'){$('interactionHint').textContent='Dua jari: zoom dan geser kamera';dragActive=true;}
+  if(phase==='end'||phase==='cancel'){dragActive=false;document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
+ onCommitOperations(operations,baseRevision){mutate(operations,{baseRevision}).catch(()=>{});}
+
 });}catch(err){showError('Grafis tidak dapat dimulai',err.message);loadingFailure(err.message);}
 
 // Event delegation: every visible control has a concrete action.
@@ -229,6 +249,7 @@ $('moreBtn').addEventListener('click',()=>openPane('more'));
 $('syncButton').addEventListener('click',()=>openPane('diagnostics'));
 $('sheetClose').addEventListener('click',stopPane);
 $('selectionClose').addEventListener('click',()=>choose(null));
+$('selectionExpand').addEventListener('click',()=>{selectionExpanded=!selectionExpanded;renderSelection();});
 $('resetCamera').addEventListener('click',()=>execute('reset-camera'));
 $('focusBtn').addEventListener('click',()=>{if(selected)renderer.focusEntity(selected)});
 $('undoBtn').addEventListener('click',()=>execute('undo'));
@@ -252,20 +273,16 @@ $('sheetBody').addEventListener('change',async event=>{
 $('sheetBody').addEventListener('input',event=>{if(event.target.id==='assetJSON')window.__assetDraft=event.target.value;if(event.target.id==='behaviorJSON')window.__behaviorDraft=event.target.value;if(event.target.id==='aiPrompt')window.__lastPrompt=event.target.value;});
 $('selectionBody').addEventListener('click',async event=>{
  const b=event.target.closest('button');if(!b)return;
- if(b.dataset.axis){axis=b.dataset.axis;renderer.setAxis(axis);renderSelection();return;}
  if(b.dataset.action&&currentEntity())await mutate([{type:'trigger_action',entityId:selected,action:b.dataset.action}]).catch(()=>{});
  if(b.dataset.operation)await execute(b.dataset.operation);
 });
 $('selectionBody').addEventListener('change',async event=>{
  const b=event.target;if(!currentEntity())return;
- if(b.id==='jointPicker'){selectedJoint=b.value;axis='flexion';renderer.setSelected(selected,selectedJoint);renderSelection();}
- if(b.id==='jointRange')await mutate([{type:'set_joint',entityId:selected,joint:selectedJoint,axis,angle:Number(b.value)}]).catch(()=>{});
- if(b.id==='rotateRange')await mutate([{type:'rotate_entity',entityId:selected,rotation:[0,Number(b.value)*Math.PI/180,0]}]).catch(()=>{});
+
 });
 $('selectionBody').addEventListener('input',event=>{
  const b=event.target;if(!data||!currentEntity())return;
- if(b.id==='jointRange'){const value=Number(b.value);currentEntity().pose[selectedJoint][axis]=value;const read=$('jointReadout');if(read)read.textContent=value+'°';}
- if(b.id==='rotateRange'){currentEntity().rotation[1]=Number(b.value)*Math.PI/180;const read=$('rotateReadout');if(read)read.textContent=b.value+'°';}
+
 });
 $('importFile').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{if(file.size>1_500_000)throw Error('File terlalu besar (maksimal 1,5 MB)');const parsed=JSON.parse(await file.text());if(!confirm('Timpa scene saat ini dengan file ini?'))return;if(embedded)throw Error('Impor snapshot hanya tersedia lewat situs mandiri karena tool restore belum dipublikasikan pada host.');await api('/api/restore','POST',{snapshot:parsed,baseRevision:data.scene.revision});await reload({force:true});notice('Scene dipulihkan dari file');}catch(err){showError('Impor gagal',err.message);}finally{event.target.value='';}});
 document.addEventListener('keydown',event=>{const inField=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(event.key==='Escape'){if(pane)stopPane();else choose(null);}if(!inField&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();execute(event.shiftKey?'redo':'undo');}});

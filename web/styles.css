@@ -4,3 +4,23 @@
 @media(max-width:650px) and (orientation:portrait){.sheet,.selection-card{left:8px;right:8px;width:auto;max-height:min(52%,470px)}.sheet-heading{padding:12px 15px 6px}.sheet-body{padding:5px 15px 15px}.brand-main em{display:none}.footnote span:last-child{display:none}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 @media(max-width:500px){.brand-symbol{display:none}.status-pill{min-width:44px;max-width:44px;justify-content:center;padding:9px}.status-pill #syncStatus{display:none}.icon-button,.camera-control{width:44px;height:44px}.topbar{gap:4px}.top-actions{gap:4px}}
+
+/* v0.4 direct claymotion: a single, light contextual strip instead of an axis inspector. */
+.pose-caption{display:flex;align-items:center;gap:9px;font-size:12px;color:#5d7979;line-height:1.5;background:#edf5f0;border-radius:14px;padding:10px 12px}
+.pose-dot{width:10px;height:10px;border-radius:50%;background:#69b1a1;box-shadow:0 0 0 4px #cfe8df;flex:none}
+.puppet-dragging .selection-card{opacity:.35;pointer-events:none;transform:translateY(6px);transition:opacity .15s,transform .15s}
+.puppet-dragging .joint-marker{opacity:.25}
+.joint-marker{width:13px;height:13px;border-width:2px;background:#fff8;box-shadow:none;opacity:.75}
+.joint-marker.active{outline:2px dashed #648bcaa5;outline-offset:5px;opacity:1}
+
+/* Context actions are tucked away until intentionally expanded. The canvas stays primary. */
+.selection-card.compact{width:min(235px,calc(100% - 24px));max-height:70px;bottom:111px;border-radius:17px;opacity:.93}
+.selection-card.compact .selection-body{display:none!important}
+.selection-card.compact .selection-head{padding:9px 10px 9px 14px;min-height:57px}
+.selection-card.compact .selection-kicker{font-size:9px;letter-spacing:.06em}
+.selection-card.compact .selection-head strong{font-size:13px;margin-top:0}
+.selection-card.compact .mini-icon{width:34px;height:34px}
+.selection-card.compact #focusBtn{display:none}
+.selection-card.compact .selection-head-actions{gap:4px}
+.puppet-dragging .selection-card{opacity:0;pointer-events:none}
+@media(max-width:700px){.selection-card.compact{bottom:82px;right:8px;width:min(225px,calc(100% - 16px))}}

@@ -32,7 +32,7 @@ for (const tool of toolsList) {
 }
 function call(studio,name,args={}){
   switch(name){
-    case 'open_studio':return {...studio.snapshot(),studioVersion:'0.3.0',widgetResource:WIDGET_URI};
+    case 'open_studio':return {...studio.snapshot(),studioVersion:'0.4.0',widgetResource:WIDGET_URI};
     case 'get_world_state':return studio.snapshot();
     case 'get_asset_catalog':return {assets:studio.assets,behaviors:studio.behaviors};
     case 'list_templates':return {templates:studio.snapshot().templates,poses:studio.snapshot().poses};
@@ -58,8 +58,8 @@ export function rpc(studio,body,widgetHTML){
   const {id,method,params={}}=body;
   if(id===undefined)return null; // notification
   try{
-    if(method==='server/discover')return {jsonrpc:'2.0',id,result:{supportedVersions:['2026-07-28'],capabilities:{tools:{},resources:{}},serverInfo:{name:'osce-sandbox-studio',version:'0.3.0'}}};
-    if(method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(params.protocolVersion)?params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'osce-sandbox-studio',version:'0.3.0'},instructions:'Tablet-first OSCE sandbox. You can create/edit equipment geometry and finite-state behavior without writing arbitrary code. Read world state first, preview major changes with preview_scene_operations, then commit using the current baseRevision. Clinical output is demonstrative, not validated clinical simulation.'}};
+    if(method==='server/discover')return {jsonrpc:'2.0',id,result:{supportedVersions:['2026-07-28'],capabilities:{tools:{},resources:{}},serverInfo:{name:'osce-sandbox-studio',version:'0.4.0'}}};
+    if(method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(params.protocolVersion)?params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'osce-sandbox-studio',version:'0.4.0'},instructions:'Tablet-first OSCE sandbox. You can create/edit equipment geometry and finite-state behavior without writing arbitrary code. Read world state first, preview major changes with preview_scene_operations, then commit using the current baseRevision. Clinical output is demonstrative, not validated clinical simulation.'}};
     if(method==='ping')return {jsonrpc:'2.0',id,result:{}};
     if(method==='tools/list')return {jsonrpc:'2.0',id,result:{tools:toolsList}};
     if(method==='resources/list')return {jsonrpc:'2.0',id,result:{resources:[{uri:WIDGET_URI,name:'OSCE Sandbox Studio',title:'Interactive 3D OSCE Sandbox',mimeType:'text/html;profile=mcp-app'}]}};

@@ -52,7 +52,7 @@ export const POSES = {
 export function defaultScene(){return {schemaVersion:1,id:'main',revision:0,title:'My Studio',environment:{floor:'#e9eeeb',wall:'#f0f0f0',grid:false},scenario:{...copy(TEMPLATES[0]),completed:[]},entities:[
   {id:'doctor',type:'character',role:'doctor',name:'Dokter',position:[-1.6,0,.45],rotation:[0,.48,0],pose:neutralPose()},
   {id:'patient',type:'character',role:'patient',name:'Pasien',position:[-.2,0,0],rotation:[0,-.38,0],pose:neutralPose()},
-  {id:'bed-1',type:'asset',assetId:'bed',name:'Bed Pemeriksaan',position:[.65,0,-1.28],rotation:[0,1.57,0],status:null},
+  {id:'bed-1',type:'asset',assetId:'bed',name:'Bed Pemeriksaan',position:[1.9,0,-1.75],rotation:[0,1.57,0],status:null},
   {id:'table-1',type:'asset',assetId:'table',name:'Meja Instrumen',position:[-2.2,0,-1.55],rotation:[0,0,0],status:null},
   {id:'goniometer-1',type:'asset',assetId:'goniometer',name:'Goniometer',position:[-2.2,.78,-1.5],rotation:[0,0,0],status:null}
  ]};}

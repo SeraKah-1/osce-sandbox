@@ -1,3 +1,4 @@
+import {installDirectTouch} from './touch-pose.js';
 // Small dependency-free WebGL renderer. All scene objects use genuine 3D vertices,
 // camera projection, lighting and depth-testing; no CDN/build step is required.
 const rad = deg => deg*Math.PI/180;
@@ -77,6 +78,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
    stopped=true;if(frameId)cancelAnimationFrame(frameId);if(lossTimer)clearTimeout(lossTimer);
    const replacement=canvas.cloneNode(false);canvas.replaceWith(replacement);
    const originalWorld=world,originalSelection=selected,originalJoint=activeJoint;
+   directTouch?.destroy();
    alternative=createFallbackRenderer(replacement,overlay,callbacks);
    alternative.setWorld(originalWorld);alternative.setSelected(originalSelection,originalJoint);alternative.setAxis(axis);alternative.setMode(mode);
    callbacks.onRendererStatus?.('fallback',reason||'WebGL gagal; mode 2D terproyeksi aktif.');
@@ -84,7 +86,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
 
  function mesh(m){const v=gl.createBuffer(),idx=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,v);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(m.vertices),gl.STATIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idx);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(m.indices),gl.STATIC_DRAW);return {v,idx,count:m.indices.length};}
  let world=null,selected=null,activeJoint=null,axis='flexion',mode='select';let sceneJoints={},projected=[];
- let alternative=null,stopped=false,lost=false,lossTimer=null,frameId=0,readyReported=false;
+ let alternative=null,stopped=false,lost=false,lossTimer=null,frameId=0,readyReported=false,directTouch=null;
  try{initializeGPU();}catch(err){useCanvasFallback('Gagal memulai WebGL: '+err.message);return alternative;}
  canvas.addEventListener('webglcontextlost',event=>{
    event.preventDefault();lost=true;
@@ -126,7 +128,7 @@ export function createRenderer(canvas,overlay,callbacks={}){
      for(const s of sk.segments){if(s.part==='torso'||s.part==='neck')continue;draw('cylinder',between(s.a,s.b,s.r),base);}
      for(const [name,p] of Object.entries(sk.joints)){
        if(name==='chest'||name==='neck'||name==='hip'||name==='head')continue;
-       if(isSelected)draw('sphere',chain(translate(...p),scale(.078,.078,.078)),jointColor);
+       if(isSelected&&name===activeJoint)draw('sphere',chain(translate(...p),scale(.086,.086,.086)),jointColor);
        if(isSelected&&['Shoulder','Elbow','Hip','Knee','Wrist','Ankle'].some(k=>name.endsWith(k))){const screen=project(p);projected.push({entityId:e.id,joint:name,screen,world:p});}
      }
      if(isSelected){for(const [joint,p] of [['neck',sk.joints.neck],['spine',sk.joints.chest]])projected.push({entityId:e.id,joint,screen:project(p),world:p});}for(const p of Object.values(sk.joints))projected.push({entityId:e.id,screen:project(p),world:p});
@@ -148,39 +150,15 @@ export function createRenderer(canvas,overlay,callbacks={}){
    try{renderFrame();if(!readyReported){readyReported=true;callbacks.onRendererStatus?.('ready','3D siap');}}
    catch(err){useCanvasFallback('Renderer WebGL gagal: '+err.message);callbacks.onRendererError?.(err);}
  }
- function renderMarkers(){const markers=projected.filter(p=>p.joint&&p.screen.visible&&p.screen.z<1);let map=new Map();for(const p of markers){const id=p.entityId+'-'+p.joint;let el=overlay.querySelector(`[data-marker="${id}"]`);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${p.screen.x}px,${p.screen.y}px)`;el.classList.toggle('active',activeJoint===p.joint);map.set(id,1);}for(const el of overlay.children){if(!map.has(el.dataset.marker))el.remove();}}
- function nearest(x,y){const hits=projected.filter(p=>p.screen.visible&&p.screen.z<1).map(p=>({...p,dist:Math.hypot(p.screen.x-x,p.screen.y-y)})).filter(p=>p.dist<(p.joint?34:70));hits.sort((a,b)=>a.dist-b.dist);return hits[0]||null;}
- function eventPos(e){const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
- function rollbackGesture(g){if(!g?.origin||!world||!g.entityId)return;
-   const ent=world.scene.entities.find(x=>x.id===g.entityId);if(!ent)return;
-   if(g.kind==='joint'&&g.joint&&ent.pose[g.joint]){ent.pose[g.joint][axis]=g.origin.angle;callbacks.onPreviewJoint?.(g.entityId,g.joint,axis,g.origin.angle);}
-   if(g.kind==='entity'){ent.position=[...g.origin.position];callbacks.onPreviewPosition?.(g.entityId,ent.position);}
- }
- const selectionChange=hit=>{if(hit){selected=hit.entityId;activeJoint=hit.joint||null;callbacks.onSelect?.(selected,activeJoint);}else {selected=null;activeJoint=null;callbacks.onSelect?.(null,null);}};
- canvas.addEventListener('pointerdown',e=>{
-   canvas.setPointerCapture(e.pointerId);const pos=eventPos(e);input.pointers.set(e.pointerId,pos);
-   if(input.pointers.size===1){const hit=nearest(pos.x,pos.y);const drag=hit&&((hit.joint&&mode!=='move')||(mode==='move'));if(hit)selectionChange(hit);input.gesture={kind:drag?(hit.joint?'joint':'entity'):'orbit',start:pos,last:pos,entityId:hit?.entityId,joint:hit?.joint,origin:null,moved:false};if(hit?.entityId&&world){const ent=world.scene.entities.find(x=>x.id===hit.entityId);input.gesture.origin=ent?{position:[...ent.position],angle:hit.joint?(ent.pose?.[hit.joint]?.[axis]||0):0}:null;}}
-   else{rollbackGesture(input.gesture);const pts=[...input.pointers.values()];input.gesture={kind:'multitouch',distance:Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y),center:[(pts[0].x+pts[1].x)/2,(pts[0].y+pts[1].y)/2]};}
+ function renderMarkers(){const markers=projected.filter(p=>p.joint&&p.joint===activeJoint&&p.screen.visible&&p.screen.z<1);let map=new Map();for(const p of markers){const id=p.entityId+'-'+p.joint;let el=overlay.querySelector(`[data-marker="${id}"]`);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${p.screen.x}px,${p.screen.y}px)`;el.classList.toggle('active',activeJoint===p.joint);map.set(id,1);}for(const el of overlay.children){if(!map.has(el.dataset.marker))el.remove();}}
+ directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:getEntityPosition,camera,
+  onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
+  onPreview(entity,hit,g){if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position);},
+  onCommit(ops,entity,gesture){callbacks.onCommitOperations?.(ops,gesture.baseRevision);},
+  onGesture(state,hit){callbacks.onGesture?.(state,hit);}
  });
- canvas.addEventListener('pointermove',e=>{
-   if(!input.pointers.has(e.pointerId))return;const p=eventPos(e);input.pointers.set(e.pointerId,p);const g=input.gesture;if(!g)return;
-   if(input.pointers.size>=2){const pts=[...input.pointers.values()],d=Math.max(10,Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y)),c=[(pts[0].x+pts[1].x)/2,(pts[0].y+pts[1].y)/2];if(g.kind!=='multitouch'){input.gesture={kind:'multitouch',distance:d,center:c};return;}camera.distance=clamp(camera.distance*g.distance/d,2.1,16);const panScale=camera.distance*.0017;camera.target[0]-=(c[0]-g.center[0])*panScale;camera.target[2]+=(c[1]-g.center[1])*panScale;g.distance=d;g.center=c;return;}
-   if(g.kind==='multitouch')return;
-   const dx=p.x-g.last.x,dy=p.y-g.last.y;if(Math.hypot(p.x-g.start.x,p.y-g.start.y)>4)g.moved=true;
-   if(g.kind==='orbit'){camera.azimuth-=dx*.007;camera.elevation=clamp(camera.elevation+dy*.007,-.05,1.45);}
-   if(g.kind==='joint'&&world&&g.entityId&&g.joint&&g.origin){const ent=world.scene.entities.find(x=>x.id===g.entityId);if(ent?.pose[g.joint]&&Object.hasOwn(ent.pose[g.joint],axis)){let value=clamp(g.origin.angle+(p.x-g.start.x)*.68-(p.y-g.start.y)*.22,-180,180);ent.pose[g.joint][axis]=Math.round(value);callbacks.onPreviewJoint?.(g.entityId,g.joint,axis,Math.round(value));}}
-   if(g.kind==='entity'&&world&&mode==='move'&&g.entityId&&g.origin){const ent=world.scene.entities.find(x=>x.id===g.entityId);if(ent&&!ent.attachedTo){const sf=camera.distance*.0024,wx=((p.x-g.start.x)*Math.cos(camera.azimuth)+(p.y-g.start.y)*Math.sin(camera.azimuth))*sf,wz=(-(p.x-g.start.x)*Math.sin(camera.azimuth)+(p.y-g.start.y)*Math.cos(camera.azimuth))*sf;ent.position=[g.origin.position[0]+wx,g.origin.position[1],g.origin.position[2]+wz];callbacks.onPreviewPosition?.(ent.id,ent.position);}}
-   g.last=p;
- });
- const finish=e=>{if(!input.pointers.has(e.pointerId))return;input.pointers.delete(e.pointerId);const g=input.gesture;if(e.type==='pointercancel'){rollbackGesture(g);input.gesture=null;return;}if(!input.pointers.size){if(g?.kind==='joint'&&g.moved&&world){const ent=world.scene.entities.find(x=>x.id===g.entityId);const value=ent?.pose[g.joint]?.[axis];if(typeof value==='number')callbacks.onCommitJoint?.(g.entityId,g.joint,axis,value);}
-   if(g?.kind==='entity'&&mode==='move'&&g.moved&&world){const ent=world.scene.entities.find(x=>x.id===g.entityId);if(ent)callbacks.onCommitPosition?.(g.entityId,ent.position);}
-   input.gesture=null;}
-   else{input.gesture=null;}
- };
- canvas.addEventListener('pointerup',finish);canvas.addEventListener('pointercancel',finish);
- canvas.addEventListener('wheel',e=>{e.preventDefault();camera.distance=clamp(camera.distance*(e.deltaY>0?1.09:.91),2.1,16);},{passive:false});
  frameId=requestAnimationFrame(render);
- return {setWorld(v){world=v;alternative?.setWorld(v);},setSelected(id,joint=null){selected=id;activeJoint=joint;alternative?.setSelected(id,joint);},setAxis(x){axis=x;alternative?.setAxis(x);},setMode(x){mode=x;alternative?.setMode(x);},resetCamera(){if(alternative)return alternative.resetCamera();Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){if(alternative)return alternative.focusEntity(id);if(!world)return;const e=world.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=[...e.position];camera.target[1]+=.9;camera.distance=3.6;},project(p){return alternative?alternative.project(p):project(p);},getJointWorld(id,name){return alternative?alternative.getJointWorld(id,name):sceneJoints[id]?.[name]||null;},getObjectWorldPosition(id){if(alternative)return alternative.getObjectWorldPosition(id);const e=world?.scene.entities.find(x=>x.id===id);return e?getEntityPosition(e):null;},getBackend(){return alternative?'canvas2d':'webgl';},stop(){stopped=true;cancelAnimationFrame(frameId);}};
+ return {setWorld(v){world=v;alternative?.setWorld(v);},setSelected(id,joint=null){selected=id;activeJoint=joint;alternative?.setSelected(id,joint);},setAxis(x){axis=x;alternative?.setAxis(x);},setMode(x){mode=x;alternative?.setMode(x);},resetCamera(){if(alternative)return alternative.resetCamera();Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){if(alternative)return alternative.focusEntity(id);if(!world)return;const e=world.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=[...e.position];camera.target[1]+=.9;camera.distance=3.6;},project(p){return alternative?alternative.project(p):project(p);},getJointWorld(id,name){return alternative?alternative.getJointWorld(id,name):sceneJoints[id]?.[name]||null;},getObjectWorldPosition(id){if(alternative)return alternative.getObjectWorldPosition(id);const e=world?.scene.entities.find(x=>x.id===id);return e?getEntityPosition(e):null;},getBackend(){return alternative?'canvas2d':'webgl';},stop(){stopped=true;cancelAnimationFrame(frameId);directTouch?.destroy();}};
 }
 
 // Graceful projected-3D Canvas fallback for devices that disable WebGL.
@@ -191,7 +169,7 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
  let baseDistance=cameraDefaultDistance(canvas);
  const camera={azimuth:.65,elevation:.45,distance:baseDistance,target:[-.35,1,0]};
  window.addEventListener('resize',()=>{const next=cameraDefaultDistance(canvas);camera.distance=clamp(camera.distance*next/baseDistance,2.1,16);baseDistance=next;});
- const pointers=new Map();let gesture=null;
+ let fallbackRunning=true;
  const project=p=>{
    const w=canvas.clientWidth||1,h=canvas.clientHeight||1;
    const eye=[camera.target[0]+camera.distance*Math.cos(camera.elevation)*Math.sin(camera.azimuth),camera.target[1]+camera.distance*Math.sin(camera.elevation),camera.target[2]+camera.distance*Math.cos(camera.elevation)*Math.cos(camera.azimuth)];
@@ -202,7 +180,7 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
  function box3d(matrix,size,color){const corners=[];for(const x of [-.5,.5])for(const y of [-.5,.5])for(const z of [-.5,.5])corners.push(project(pt(matrix,[x*size[0],y*size[1],z*size[2]])));
    for(const ids of [[0,1,3,2],[4,5,7,6],[0,1,5,4],[2,3,7,6],[0,2,6,4],[1,3,7,5]]){if(ids.some(i=>!corners[i].visible))continue;ctx.beginPath();ctx.moveTo(corners[ids[0]].x,corners[ids[0]].y);for(const i of ids.slice(1))ctx.lineTo(corners[i].x,corners[i].y);ctx.closePath();ctx.fillStyle=color;ctx.fill();ctx.lineWidth=.7;ctx.strokeStyle='#465c6524';ctx.stroke();}}
  function resolveWorld(e,depth=0){if(!e.attachedTo||depth>3)return e.position;const target=world.scene.entities.find(v=>v.id===e.attachedTo);if(!target)return e.position;if(target.type==='character'){const j=jointWorld[target.id]||characterSkeleton(target).joints;return attachmentPoint(j,e.anchor||'rightHand');}const blueprint=world.assets.find(a=>a.id===target.assetId);return add(resolveWorld(target,depth+1),blueprint?.anchors?.find(a=>a.id===e.anchor)?.position||[0,.2,0]);}
- function render(){if(world){const w=canvas.clientWidth||1,h=canvas.clientHeight||1,dpr=Math.min(window.devicePixelRatio||1,1.5);if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#f0f0ee';ctx.fillRect(0,0,w,h);
+ function render(){if(!fallbackRunning)return;if(world){const w=canvas.clientWidth||1,h=canvas.clientHeight||1,dpr=Math.min(window.devicePixelRatio||1,1.5);if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#f0f0ee';ctx.fillRect(0,0,w,h);
    // A quiet perspective floor reads as 3D without a CAD-style grid.
    const floor=[[-4,0,-3.5],[4,0,-3.5],[4,0,3.5],[-4,0,3.5]].map(project);
    if(floor.every(x=>x.visible)){ctx.beginPath();ctx.moveTo(floor[0].x,floor[0].y);floor.slice(1).forEach(v=>ctx.lineTo(v.x,v.y));ctx.closePath();ctx.fillStyle=world.scene.environment?.floor||'#e9eeeb';ctx.fill();}
@@ -216,7 +194,7 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
      line(sk.joints.leftShoulder,sk.joints.rightShoulder,clamp(80/camera.distance,10,22),clr);
      circle(sk.joints.hip,.13,clr);circle(sk.joints.head,.20,e.role==='doctor'?'#b2dbcb':'#e9c9af',detail);
      for(const [j,p] of Object.entries(sk.joints)){
-       if(['head','hip','chest','neck'].includes(j))continue;if(selected===e.id)circle(p,.038,detail);
+       if(['head','hip','chest','neck'].includes(j))continue;if(selected===e.id&&j===activeJoint)circle(p,.052,detail);
        if(selected===e.id&&['Shoulder','Elbow','Hip','Knee','Wrist','Ankle'].some(part=>j.endsWith(part)))projected.push({entityId:e.id,joint:j,screen:project(p)});
      }
      if(selected===e.id){projected.push({entityId:e.id,joint:'neck',screen:project(sk.joints.neck)});projected.push({entityId:e.id,joint:'spine',screen:project(sk.joints.chest)});}
@@ -225,23 +203,15 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
    for(const e of entities.filter(e=>e.type==='asset')){const asset=world.assets.find(a=>a.id===e.assetId);if(!asset)continue;const p=resolveWorld(e);const matrix=chain(translate(...p),rotY(e.rotation?.[1]||0));const visual=stateVisual(world,e,asset);for(const part of asset.parts){const at=pt(matrix,part.position),size=part.size.map(x=>x*(visual.scale||1)),clr=visual.color||part.color;if(part.shape==='box'){box3d(chain(matrix,translate(...part.position)),size,clr);}else if(part.shape==='sphere'){circle(at,Math.max(...size)*.55,clr);}else{line(pt(chain(matrix,translate(...part.position)),[0,-size[1]/2,0]),pt(chain(matrix,translate(...part.position)),[0,size[1]/2,0]),clamp(size[0]*180/camera.distance,3,28),clr);}}
      projected.push({entityId:e.id,screen:project(p)});if(selected===e.id)circle(p,.11,'#51d3c5','#187c88');
    }
-   const known=new Set();for(const v of projected.filter(x=>x.joint&&x.screen.visible)){const id=v.entityId+'-'+v.joint;known.add(id);let el=[...overlay.children].find(el=>el.dataset.marker===id);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${v.screen.x}px,${v.screen.y}px)`;el.classList.toggle('active',v.joint===activeJoint);}for(const el of [...overlay.children])if(!known.has(el.dataset.marker))el.remove();
+   const known=new Set();for(const v of projected.filter(x=>x.joint&&x.joint===activeJoint&&x.screen.visible)){const id=v.entityId+'-'+v.joint;known.add(id);let el=[...overlay.children].find(el=>el.dataset.marker===id);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${v.screen.x}px,${v.screen.y}px)`;el.classList.toggle('active',v.joint===activeJoint);}for(const el of [...overlay.children])if(!known.has(el.dataset.marker))el.remove();
  }
  requestAnimationFrame(render);}
- function rollback(g){if(!g||!world)return;const e=world.scene.entities.find(x=>x.id===g.hit?.entityId);if(!e)return;
-   if(g.kind==='joint'&&g.hit?.joint&&e.pose?.[g.hit.joint]&&Number.isFinite(g.angle))e.pose[g.hit.joint][axis]=g.angle;
-   if(g.kind==='move'&&g.position)e.position=[...g.position];
- }
- const evtP=e=>{const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
- canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=evtP(e);pointers.set(e.pointerId,p);if(pointers.size>1){rollback(gesture);const ps=[...pointers.values()];gesture={kind:'multi',dist:Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y),center:[(ps[0].x+ps[1].x)/2,(ps[0].y+ps[1].y)/2]};return;}
-   const hit=projected.map(v=>({...v,d:Math.hypot(v.screen.x-p.x,v.screen.y-p.y)})).filter(v=>v.d<(v.joint?35:60)).sort((a,b)=>a.d-b.d)[0];if(hit){selected=hit.entityId;activeJoint=hit.joint||null;callbacks.onSelect?.(selected,activeJoint);}
-   const entity=world?.scene.entities.find(x=>x.id===hit?.entityId);gesture={kind:hit&&hit.joint?'joint':hit&&mode==='move'?'move':'orbit',hit,start:p,last:p,moved:false,angle:entity?.pose[hit?.joint]?.[axis]||0,position:entity?[...entity.position]:null};
+ const directTouch=installDirectTouch({canvas,getWorld:()=>world,project,skeleton:characterSkeleton,assetPosition:resolveWorld,camera,
+  onSelect(id,joint){selected=id;activeJoint=joint;callbacks.onSelect?.(id,joint);},
+  onPreview(entity,hit,g){if(hit?.kind==='pose')callbacks.onPreviewPose?.(entity.id,hit.target.joint,entity.pose,g);else callbacks.onPreviewPosition?.(entity.id,entity.position);},
+  onCommit(ops,entity,gesture){callbacks.onCommitOperations?.(ops,gesture.baseRevision);},
+  onGesture(state,hit){callbacks.onGesture?.(state,hit);}
  });
- canvas.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const p=evtP(e);pointers.set(e.pointerId,p);if(!gesture)return;if(pointers.size>1){const ps=[...pointers.values()],d=Math.max(10,Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y)),c=[(ps[0].x+ps[1].x)/2,(ps[0].y+ps[1].y)/2];if(gesture.kind!=='multi'){gesture={kind:'multi',dist:d,center:c};return;}camera.distance=clamp(camera.distance*gesture.dist/d,2.1,16);gesture.dist=d;camera.target[0]-=(c[0]-gesture.center[0])*camera.distance*.0017;camera.target[2]+=(c[1]-gesture.center[1])*camera.distance*.0017;gesture.center=c;return;}
-   const g=gesture;g.moved=g.moved||Math.hypot(p.x-g.start.x,p.y-g.start.y)>4;if(g.kind==='orbit'){camera.azimuth-=(p.x-g.last.x)*.007;camera.elevation=clamp(camera.elevation+(p.y-g.last.y)*.007,-.05,1.45);}else if(g.kind==='joint'){const h=g.hit;const entity=world.scene.entities.find(x=>x.id===h.entityId);if(entity?.pose[h.joint]&&Object.hasOwn(entity.pose[h.joint],axis))entity.pose[h.joint][axis]=Math.round(clamp(g.angle+(p.x-g.start.x)*.68-(p.y-g.start.y)*.22,-180,180));}else if(g.kind==='move'){const entity=world.scene.entities.find(x=>x.id===g.hit.entityId);if(entity&&!entity.attachedTo){const sf=camera.distance*.0024;entity.position=[g.position[0]+((p.x-g.start.x)*Math.cos(camera.azimuth)+(p.y-g.start.y)*Math.sin(camera.azimuth))*sf,g.position[1],g.position[2]+(-(p.x-g.start.x)*Math.sin(camera.azimuth)+(p.y-g.start.y)*Math.cos(camera.azimuth))*sf];}}g.last=p;
- });
- const finish=e=>{if(!pointers.has(e.pointerId))return;pointers.delete(e.pointerId);const g=gesture;if(e.type==='pointercancel'){rollback(g);gesture=null;return;}if(!pointers.size&&g?.moved){if(g.kind==='joint'){const h=g.hit,entity=world.scene.entities.find(x=>x.id===h.entityId),a=entity?.pose[h.joint]?.[axis];if(typeof a==='number')callbacks.onCommitJoint?.(h.entityId,h.joint,axis,a);}else if(g.kind==='move'){const entity=world.scene.entities.find(x=>x.id===g.hit.entityId);if(entity)callbacks.onCommitPosition?.(entity.id,entity.position);}}gesture=null;};
- canvas.addEventListener('pointerup',finish);canvas.addEventListener('pointercancel',finish);canvas.addEventListener('wheel',e=>{e.preventDefault();camera.distance=clamp(camera.distance*(e.deltaY>0?1.09:.91),2.1,16);},{passive:false});
  requestAnimationFrame(render);
- return {setWorld(v){world=v;},setSelected(id,joint=null){selected=id;activeJoint=joint;},setAxis(v){axis=v;},setMode(v){mode=v;},resetCamera(){Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){const e=world?.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=add(e.position,[0,.9,0]);camera.distance=3.5;},project,getJointWorld(id,name){return jointWorld[id]?.[name]||null;},getObjectWorldPosition(id){const e=world?.scene.entities.find(x=>x.id===id);return e?resolveWorld(e):null;},getBackend(){return 'canvas2d';},stop(){/* fallback loop uses visibility throttling */}};
+ return {setWorld(v){world=v;},setSelected(id,joint=null){selected=id;activeJoint=joint;},setAxis(v){axis=v;},setMode(v){mode=v;},resetCamera(){Object.assign(camera,{azimuth:.65,elevation:.45,distance:cameraDefaultDistance(canvas),target:[-.35,1,0]});},focusEntity(id){const e=world?.scene.entities.find(x=>x.id===id);if(!e)return;camera.target=add(e.position,[0,.9,0]);camera.distance=3.5;},project,getJointWorld(id,name){return jointWorld[id]?.[name]||null;},getObjectWorldPosition(id){const e=world?.scene.entities.find(x=>x.id===id);return e?resolveWorld(e):null;},getBackend(){return 'canvas2d';},stop(){fallbackRunning=false;directTouch.destroy();}};
 }

@@ -43,22 +43,22 @@
  </header>
  <main class="main-area" id="mainArea">
   <section class="viewport-shell" id="stage" aria-label="Studio 3D interaktif">
-   <canvas id="scene3d" aria-label="Ruang 3D. Sentuh objek untuk memilih, seret ruang kosong untuk memutar kamera, cubit dua jari untuk zoom." tabindex="0"></canvas>
+   <canvas id="scene3d" aria-label="Ruang 3D. Tarik tubuh pasien untuk memindahkan, tarik tangan atau kaki untuk mengubah pose. Seret ruang kosong untuk memutar kamera, cubit dua jari untuk zoom." tabindex="0"></canvas>
    <div class="hotspots" id="hotspots" aria-hidden="true"></div>
    <div class="viewport-top">
     <div class="camera-pill">Free Camera <span class="camera-icon" aria-hidden="true">◌</span></div>
     <button class="camera-control" id="resetCamera" type="button" title="Reset kamera" aria-label="Reset kamera"><svg><use href="#i-focus"/></svg></button>
    </div>
    <div class="renderer-pill" id="rendererPill" hidden></div>
-   <div class="interaction-hint" id="interactionHint">Tap objek • geser kamera • pinch untuk zoom</div>
+   <div class="interaction-hint" id="interactionHint">Tarik tubuh, tangan, atau kaki · cubit untuk zoom</div>
    <div class="loading-overlay" id="loadingOverlay" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Menyiapkan playground…</strong><small id="loadingDetail">Memuat scene</small><button type="button" class="soft-button" id="retryLoad" hidden>Coba lagi</button></div>
    <div class="error-bar" id="errorBar" role="alert" hidden><svg><use href="#i-alert"/></svg><div class="error-copy"><strong id="errorTitle">Ada masalah</strong><span id="errorText"></span></div><button type="button" id="errorDismiss" aria-label="Tutup error"><svg><use href="#i-close"/></svg></button></div>
    <section class="sheet" id="sheet" aria-label="Panel" hidden>
     <div class="sheet-heading"><div><span class="sheet-eyebrow" id="sheetEyebrow">STUDIO</span><h2 id="sheetTitle">Tambah objek</h2></div><button class="icon-button" id="sheetClose" type="button" aria-label="Tutup panel"><svg><use href="#i-close"/></svg></button></div>
     <div class="sheet-body" id="sheetBody"></div>
    </section>
-   <section class="selection-card" id="selectionCard" hidden aria-label="Kontrol objek terpilih">
-    <div class="selection-head"><div><span class="selection-kicker" id="selectionKicker">SELECTED</span><strong id="selectionName">Patient</strong></div><div class="selection-head-actions"><button class="mini-icon" id="focusBtn" type="button" title="Fokus pada objek" aria-label="Fokus pada objek"><svg><use href="#i-focus"/></svg></button><button class="mini-icon" id="selectionClose" type="button" title="Batal pilih" aria-label="Batal pilih"><svg><use href="#i-close"/></svg></button></div></div>
+   <section class="selection-card compact" id="selectionCard" hidden aria-label="Kontrol objek terpilih">
+    <div class="selection-head"><div><span class="selection-kicker" id="selectionKicker">SELECTED</span><strong id="selectionName">Patient</strong></div><div class="selection-head-actions"><button class="mini-icon" id="selectionExpand" type="button" title="Tampilkan tindakan boneka" aria-label="Tampilkan tindakan objek" aria-expanded="false"><svg><use href="#i-more"/></svg></button><button class="mini-icon" id="focusBtn" type="button" title="Fokus pada objek" aria-label="Fokus pada objek"><svg><use href="#i-focus"/></svg></button><button class="mini-icon" id="selectionClose" type="button" title="Batal pilih" aria-label="Batal pilih"><svg><use href="#i-close"/></svg></button></div></div>
     <div id="selectionBody" class="selection-body"></div>
    </section>
    <nav class="dock" aria-label="Aksi utama">
