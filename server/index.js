@@ -37,7 +37,7 @@ const server=http.createServer(async(req,res)=>{
   if(req.headers.origin&&new URL(req.headers.origin).host!==req.headers.host&&url.pathname!=='/health')throw new SceneError('Cross-origin request forbidden','FORBIDDEN',403);
   if(req.method==='OPTIONS'){res.writeHead(204,{'Allow':'GET,POST,DELETE,PATCH,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,X-Studio-Session,MCP-Protocol-Version,MCP-Session-Id,Accept'});res.end();return;}
   if(req.method==='GET'&&url.pathname==='/widget'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'self'"});res.end(widgetHTML());return;}
-  if(url.pathname==='/health'){json(res,200,{ok:true,server:'osce-playground',version:'0.6.0',persistence:false,sessionCount:worlds.sessions.size});return;}
+  if(url.pathname==='/health'){json(res,200,{ok:true,server:'osce-playground',version:'0.7.0',persistence:false,sessionCount:worlds.sessions.size});return;}
   if(url.pathname==='/mcp'){
     if(!authorized(req)){json(res,401,{error:'Bearer token required'});return;}
     if(req.method!=='POST'){json(res,405,{error:'POST only'});return;}
@@ -84,5 +84,5 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='HEAD')res.end();else fs.createReadStream(file).pipe(res);
  }catch(e){json(res,e.status||400,{error:e.message,code:e.code||'INTERNAL_ERROR'});}
 });
-server.listen(PORT,HOST,()=>console.log(`OSCE Playground v0.6 at http://${HOST}:${PORT} · sessions RAM only · MCP /mcp`));
+server.listen(PORT,HOST,()=>console.log(`OSCE Playground v0.7 at http://${HOST}:${PORT} · sessions RAM only · MCP /mcp`));
 process.on('SIGTERM',()=>server.close());

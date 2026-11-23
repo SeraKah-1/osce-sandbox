@@ -60,3 +60,16 @@ test('pointercancel reverts the patient position and does not save',()=>{
  assert.notDeepEqual(ent.position,initial);h.send('pointercancel',1,p.x+120,p.y+21);
  assert.deepEqual(ent.position,initial);assert.equal(h.commits.length,0);h.control.destroy();
 });
+
+test('posing a supported patient changes joints without detaching them from the bed',()=>{
+ const h=pointerHarness(),ent=h.world.scene.entities.find(x=>x.id==='patient');
+ ent.supportedBy={entityId:'bed-1',affordanceId:'lie',kind:'bed'};
+ const p=project(characterSkeleton(ent).joints.rightWrist);
+ h.send('pointerdown',1,p.x,p.y);
+ h.send('pointermove',1,p.x-51,p.y-36);
+ h.send('pointerup',1,p.x-51,p.y-36);
+ assert.equal(h.commits.length,1);
+ assert.ok(h.commits[0].every(op=>op.type==='set_joint'));
+ assert.equal(ent.supportedBy.entityId,'bed-1');
+ h.control.destroy();
+});

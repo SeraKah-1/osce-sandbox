@@ -1,5 +1,5 @@
 import {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3} from './ik3d.js';
-import {placementCandidate,chairCandidate} from './placement.js';
+import {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported} from './placement.js';
 // One touch language for every renderer. Posing is projected into screen space,
 // so no axis selector or slider is required. All edits remain ordinary scene operations.
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
@@ -24,7 +24,28 @@ export function hitTestPuppet(world,project,skeleton,assetPosition,pointer){
    }
    for(const j of ['chest','hip','neck','head'])push(e.id,'move-character',P[j],5,null,J[j]);
    if(P.hip?.visible&&P.chest?.visible){const q=pointOnSegment(pointer,P.hip,P.chest),d=distance(pointer,q);if(d<33)candidates.push({entityId:e.id,kind:'move-character',d,score:d-5,world:J.chest});}
-  }else{const pos=assetPosition(e);push(e.id,'move-asset',project(pos),6,null,pos);}
+  }else{
+   if(world.assets.find(a=>a.id===e.assetId)?.movable===false)continue;
+   const pos=assetPosition(e),p=project(pos);push(e.id,'move-asset',p,6,null,pos);
+   const def=world.assets.find(a=>a.id===e.assetId),yaw=e.rotation?.[1]||0;
+   if(!def?.parts?.length)continue;
+   // A furniture object can be grabbed anywhere on its visible 3D silhouette,
+   // not only in a 43px circle around its origin.
+   const px=[];
+   for(const part of def.parts){
+     const [sx,sy,sz]=part.size;
+     for(const ax of [-.5,.5])for(const ay of [-.5,.5])for(const az of [-.5,.5]){
+       const x=part.position[0]+sx*ax,z=part.position[2]+sz*az;
+       const raw=[pos[0]+Math.cos(yaw)*x+Math.sin(yaw)*z,pos[1]+part.position[1]+sy*ay,pos[2]-Math.sin(yaw)*x+Math.cos(yaw)*z];
+       const cp=project(raw);if(cp?.visible&&cp.z<1)px.push(cp);
+     }
+   }
+   if(px.length){const left=Math.min(...px.map(q=>q.x))-6,right=Math.max(...px.map(q=>q.x))+6,top=Math.min(...px.map(q=>q.y))-6,bottom=Math.max(...px.map(q=>q.y))+6;
+     const dx=Math.max(left-pointer.x,0,pointer.x-right),dy=Math.max(top-pointer.y,0,pointer.y-bottom);
+     const dist=Math.hypot(dx,dy);
+     if(dist<12)candidates.push({entityId:e.id,kind:'move-asset',target:null,d:dist,score:dist+3+Math.min(7,distance(p,pointer)*.016),world:pos});
+   }
+  }
  }
  candidates.sort((a,b)=>a.score-b.score||a.d-b.d);return candidates[0]||null;
 }
@@ -47,7 +68,10 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
  const caf=typeof cancelAnimationFrame==='function'?cancelAnimationFrame:null;
  const cancelFrame=g=>{if(g?.frame&&caf)caf(g.frame);if(g){g.frame=null;g.pending=null;}};
  const resetProvisional=g=>{if(!g?.origin)return;const e=getWorld()?.scene.entities.find(e=>e.id===g.hit?.entityId);if(!e)return;
-   e.position=[...g.origin.position];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);onPreview?.(e,g.hit,null,true);};
+   e.position=[...g.origin.position];e.rotation=[...g.origin.rotation];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);
+   if(g.origin.supportedBy)e.supportedBy=structuredClone(g.origin.supportedBy);else delete e.supportedBy;
+   if(g.origin.restingOn)e.restingOn=structuredClone(g.origin.restingOn);else delete e.restingOn;
+   if(e.type==='asset')reflowSupported(getWorld(),e.id);onPreview?.(e,g.hit,null,true);};
  const sceneEntity=g=>getWorld()?.scene.entities.find(e=>e.id===g?.hit?.entityId);
  const applyPose=(g,p)=>{
   if(!g||g.kind!=='pose')return;
@@ -81,20 +105,43 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   }
   e.position=[clamp(next[0],-12,12),clamp(next[1],-5,12),clamp(next[2],-12,12)];
   if(g.kind==='move-character'){
-    g.seat=chairCandidate(getWorld(),e.position);
-    if(g.seat&&applySnap){e.position=[...g.seat.position];const preset=getWorld()?.poses?.sitting;
-      if(preset)e.pose=structuredClone(preset);
-    }else if(g.origin.pose)e.pose=structuredClone(g.origin.pose);
+    g.characterSnap=characterPlacementCandidate(getWorld(),e,e.position);
+    if(g.characterSnap&&applySnap){
+      const c=g.characterSnap;e.position=[...c.position];e.rotation=[...c.rotation];
+      e.pose=structuredClone(getWorld().poses[c.pose]);
+      e.supportedBy={entityId:c.supportId,affordanceId:c.affordanceId,kind:c.kind};
+    }else if(applySnap){
+      delete e.supportedBy;
+      if(g.origin.supportedBy){e.position[1]=0;e.rotation=[0,g.origin.rotation[1],0];e.pose=structuredClone(getWorld().poses.standing);}
+      else {e.rotation=[...g.origin.rotation];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);}
+    }else{
+      e.rotation=[...g.origin.rotation];if(g.origin.pose)e.pose=structuredClone(g.origin.pose);
+    }
+  }else{
+    if(g.snap&&applySnap){e.restingOn={entityId:g.snap.supportId,affordanceId:g.snap.affordanceId,localOffset:[...g.snap.localOffset]};}
+    else if(applySnap)delete e.restingOn;
+    if(e.type==='asset')reflowSupported(getWorld(),e.id);
   }
   onPreview?.(e,g.hit,g);
  };
  const operations=g=>{
   if(!g?.moved||!g.hit||!g.origin)return [];
   const e=sceneEntity(g);if(!e)return [];
+  if(e.type==='character'&&g.kind==='move-character'&&e.supportedBy){
+    return [{type:'place_character',entityId:e.id,supportId:e.supportedBy.entityId,affordanceId:e.supportedBy.affordanceId}];
+  }
+  if(e.type==='asset'&&g.kind==='move-asset'&&e.restingOn){
+    return [{type:'place_asset',entityId:e.id,supportId:e.restingOn.entityId,affordanceId:e.restingOn.affordanceId,localOffset:[...e.restingOn.localOffset]}];
+  }
   const out=[];
-  if(e.position.some((n,i)=>Math.abs(n-g.origin.position[i])>1e-4))out.push({type:'move_entity',entityId:e.id,position:[...e.position]});
-  if(e.type==='character'&&g.origin.pose)for(const [joint,axes] of Object.entries(e.pose))for(const [axis,angle] of Object.entries(axes)){
-   if(Math.abs(angle-(g.origin.pose[joint]?.[axis]??0))>.025)out.push({type:'set_joint',entityId:e.id,joint,axis,angle:Math.round(angle*100)/100});
+  const positionChanged=e.position.some((n,i)=>Math.abs(n-g.origin.position[i])>1e-4);
+  if(g.kind!=='pose'&&(positionChanged||g.origin.supportedBy||g.origin.restingOn))out.push({type:'move_entity',entityId:e.id,position:[...e.position]});
+  if(e.rotation.some((n,i)=>Math.abs(n-(g.origin.rotation?.[i]||0))>1e-4))out.push({type:'rotate_entity',entityId:e.id,rotation:[...e.rotation]});
+  if(e.type==='character'&&g.origin.pose){
+   if(g.origin.supportedBy&&!e.supportedBy){out.push({type:'apply_pose',entityId:e.id,presetId:'standing'});}
+   else for(const [joint,axes] of Object.entries(e.pose))for(const [axis,angle] of Object.entries(axes)){
+    if(Math.abs(angle-(g.origin.pose[joint]?.[axis]??0))>.025)out.push({type:'set_joint',entityId:e.id,joint,axis,angle:Math.round(angle*100)/100});
+   }
   }
   return out;
  };
@@ -112,7 +159,7 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   const hit=hitTestPuppet(getWorld(),project,skeleton,assetPosition,p);
   const ent=getWorld()?.scene.entities.find(x=>x.id===hit?.entityId);
   if(hit)onSelect?.(hit.entityId,hit.kind==='pose'?hit.target.joint:null);
-  const origin=ent?{position:[...ent.position],pose:ent.type==='character'?structuredClone(ent.pose):null}:null;
+  const origin=ent?{position:[...ent.position],pose:ent.type==='character'?structuredClone(ent.pose):null,rotation:[...ent.rotation],supportedBy:ent.supportedBy?structuredClone(ent.supportedBy):null,restingOn:ent.restingOn?structuredClone(ent.restingOn):null}:null;
   const g={kind:hit?.kind||'orbit',hit,initial:p,last:p,moved:false,origin,
     grabWorld:hit?.world?[...hit.world]:null,pole:null,frame:null,pending:null};
   if(g.kind==='pose'&&ent){const spec=limbSpec(ent,hit.target.side,hit.target.limb,skeleton);g.pole=choosePole(spec);}

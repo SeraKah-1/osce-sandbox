@@ -1,0 +1,23 @@
+{
+  "behavior": {
+    "id": "lamp-battery-behavior",
+    "name": "Lampu dengan Baterai",
+    "states": ["off", "on"],
+    "initial": "off",
+    "transitions": [
+      {"from":"off","action":"power_on","to":"on","label":"Nyalakan","when":[{"key":"charge","operator":"gte","value":1}],"effects":[{"type":"adjust_parameter","key":"charge","delta":-1,"min":0,"max":100}]},
+      {"from":"on","action":"power_off","to":"off","label":"Matikan"}
+    ],
+    "visuals": {"on":{"color":"#ffe3a1"}}
+  },
+  "asset": {
+    "id":"custom-battery-lamp",
+    "name":"Lampu Latihan",
+    "category":"Alat",
+    "movable":true,
+    "parts":[{"shape":"cylinder","position":[0,0,0],"size":[0.10,0.32,0.10],"color":"#5484ac"}],
+    "anchors":[{"id":"grip","position":[0,0,0]}],
+    "parameters":{"charge":5},
+    "behaviorId":"lamp-battery-behavior"
+  }
+}

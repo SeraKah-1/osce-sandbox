@@ -1,3 +1,5 @@
+import {characterPlacement,characterPlacementCandidate,surfacePosition,reflowSupported,affordancesFor} from '../web/placement.js';
+
 export class SceneError extends Error {
   constructor(message, code='VALIDATION_ERROR', status=400) { super(message); this.code=code; this.status=status; }
 }
@@ -18,10 +20,19 @@ function requireAnchor(target,anchor,assets){
   }
 }
 
+function requireAcyclicSupport(entity,support,entities){
+  const seen=new Set([entity.id]);
+  for(let item=support;item;item=entities.find(candidate=>candidate.id===item.restingOn?.entityId)){
+    if(seen.has(item.id))fail('Permukaan penopang membentuk lingkaran');
+    seen.add(item.id);
+    if(!item.restingOn)break;
+  }
+}
+
 const builtInAssets = [
-  {id:'bed',name:'Bed Pemeriksaan',category:'Furnitur',parts:[{shape:'box',position:[0,.46,0],size:[1.9,.18,.78],color:'#8fa8b8'},{shape:'box',position:[-.78,.28,0],size:[.08,.44,.72],color:'#657d8e'},{shape:'box',position:[.79,.28,0],size:[.08,.44,.72],color:'#657d8e'},{shape:'box',position:[0,.57,0],size:[1.83,.065,.74],color:'#d3e5eb'}],anchors:[{id:'surface',position:[0,.63,0]}]},
-  {id:'chair',name:'Kursi Pasien',category:'Furnitur',parts:[{shape:'box',position:[0,.45,0],size:[.55,.09,.55],color:'#759fb0'},{shape:'box',position:[0,.76,-.25],size:[.55,.65,.08],color:'#759fb0'},{shape:'box',position:[-.22,.22,0],size:[.07,.45,.07],color:'#536c7b'},{shape:'box',position:[.22,.22,0],size:[.07,.45,.07],color:'#536c7b'}],anchors:[{id:'seat',position:[0,.52,0]}]},
-  {id:'table',name:'Meja Instrumen',category:'Furnitur',parts:[{shape:'box',position:[0,.7,0],size:[.9,.07,.55],color:'#8eacb3'},{shape:'box',position:[-.35,.36,-.19],size:[.06,.68,.06],color:'#617b84'},{shape:'box',position:[.35,.36,.19],size:[.06,.68,.06],color:'#617b84'}],anchors:[{id:'top',position:[0,.77,0]}]},
+  {id:'bed',name:'Bed Pemeriksaan',category:'Furnitur',parts:[{shape:'box',position:[0,.46,0],size:[1.9,.18,.78],color:'#8fa8b8'},{shape:'box',position:[-.78,.28,0],size:[.08,.44,.72],color:'#657d8e'},{shape:'box',position:[.79,.28,0],size:[.08,.44,.72],color:'#657d8e'},{shape:'box',position:[0,.57,0],size:[1.83,.065,.74],color:'#d3e5eb'}],anchors:[{id:'surface',position:[0,.63,0]}],affordances:[{id:'lie',kind:'bed',anchor:'surface',radius:1.2,pose:'lying',yawOffset:1.5707963267948966},{id:'top',kind:'surface',anchor:'surface',halfExtents:[.93,.35]}]},
+  {id:'chair',name:'Kursi Pasien',category:'Furnitur',parts:[{shape:'box',position:[0,.45,0],size:[.55,.09,.55],color:'#759fb0'},{shape:'box',position:[0,.76,-.25],size:[.55,.65,.08],color:'#759fb0'},{shape:'box',position:[-.22,.22,0],size:[.07,.45,.07],color:'#536c7b'},{shape:'box',position:[.22,.22,0],size:[.07,.45,.07],color:'#536c7b'}],anchors:[{id:'seat',position:[0,.52,0]}],affordances:[{id:'sit',kind:'seat',anchor:'seat',radius:.72,pose:'sitting'}]},
+  {id:'table',name:'Meja Instrumen',category:'Furnitur',parts:[{shape:'box',position:[0,.7,0],size:[.9,.07,.55],color:'#8eacb3'},{shape:'box',position:[-.35,.36,-.19],size:[.06,.68,.06],color:'#617b84'},{shape:'box',position:[.35,.36,.19],size:[.06,.68,.06],color:'#617b84'}],anchors:[{id:'top',position:[0,.77,0]}],affordances:[{id:'top',kind:'surface',anchor:'top',halfExtents:[.44,.27]}]},
   {id:'stethoscope',name:'Stetoskop',category:'Alat',parts:[{shape:'cylinder',position:[0,.14,0],size:[.065,.28,.065],color:'#3186aa'},{shape:'sphere',position:[0,-.06,0],size:[.12,.035,.12],color:'#bdcbd3'},{shape:'sphere',position:[0,.29,0],size:[.065,.055,.06],color:'#dbe4ea'}],anchors:[{id:'grip',position:[0,.18,0]}],behaviorId:'attach-basic'},
   {id:'cuff',name:'Manset Tensimeter',category:'Alat',parts:[{shape:'box',position:[0,0,0],size:[.32,.16,.17],color:'#317fa9'},{shape:'box',position:[.24,-.02,0],size:[.15,.08,.13],color:'#425c72'}],anchors:[{id:'grip',position:[0,0,0]}],behaviorId:'cuff-behavior'},
   {id:'goniometer',name:'Goniometer',category:'Alat',parts:[{shape:'box',position:[-.18,0,0],size:[.40,.018,.035],color:'#e2bb6d'},{shape:'box',position:[.13,0,.13],size:[.035,.018,.37],color:'#dfac55'},{shape:'sphere',position:[0,.01,0],size:[.045,.02,.045],color:'#c48d3a'}],anchors:[{id:'pivot',position:[0,0,0]}]},
@@ -46,6 +57,7 @@ const neutralPose = () => ({rightShoulder:{flexion:0,abduction:8,rotation:0},lef
 export const POSES = {
  standing: neutralPose(),
  sitting: {...neutralPose(),rightHip:{flexion:-90,abduction:0,rotation:0},leftHip:{flexion:-90,abduction:0,rotation:0},rightKnee:{flexion:90},leftKnee:{flexion:90}},
+ lying: neutralPose(),
  'right-shoulder-abduction': {...neutralPose(),rightShoulder:{flexion:0,abduction:95,rotation:0}},
  'raised-arm': {...neutralPose(),rightShoulder:{flexion:125,abduction:0,rotation:0},rightElbow:{flexion:35}}
 };
@@ -54,24 +66,75 @@ export function defaultScene(){return {schemaVersion:1,id:'main',revision:0,titl
   {id:'patient',type:'character',role:'patient',name:'Pasien',position:[-.2,0,0],rotation:[0,-.38,0],pose:neutralPose()},
   {id:'bed-1',type:'asset',assetId:'bed',name:'Bed Pemeriksaan',position:[1.9,0,-1.75],rotation:[0,1.57,0],status:null},
   {id:'table-1',type:'asset',assetId:'table',name:'Meja Instrumen',position:[-2.2,0,-1.55],rotation:[0,0,0],status:null},
-  {id:'goniometer-1',type:'asset',assetId:'goniometer',name:'Goniometer',position:[-2.2,.78,-1.5],rotation:[0,0,0],status:null}
+  {id:'goniometer-1',type:'asset',assetId:'goniometer',name:'Goniometer',position:[-2.2,.791,-1.55],rotation:[0,0,0],status:null,restingOn:{entityId:'table-1',affordanceId:'top',localOffset:[0,0,0]}}
  ]};}
 function validateAsset(asset){
   if(!asset||!cleanId(asset.id)||typeof asset.name!=='string'||asset.name.trim().length<2||asset.name.length>90) fail('Aset membutuhkan id dan nama yang valid');
   if(!Array.isArray(asset.parts)||asset.parts.length<1||asset.parts.length>60) fail('Aset membutuhkan 1–60 bagian 3D');
   for(const part of asset.parts){if(!['box','sphere','cylinder'].includes(part.shape)||!vector(part.position,20)||!vector(part.size,20)||part.size.some(n=>n<=.002)||!color(part.color)) fail(`Geometri tidak valid pada aset ${asset.id}`);}
   if(asset.anchors!==undefined){if(!Array.isArray(asset.anchors)||asset.anchors.length>30||asset.anchors.some(a=>!cleanId(a.id)||!vector(a.position,20))) fail('Anchor aset tidak valid');}
+  const affords=asset.affordances||[];
+  if(!Array.isArray(affords)||affords.length>12)fail('Maksimal 12 interaksi permukaan per aset');
+  const affIDs=new Set();
+  for(const a of affords){
+    if(!a||!cleanId(a.id)||affIDs.has(a.id)||!['seat','bed','surface'].includes(a.kind))fail('Tipe atau ID interaksi tidak valid');
+    affIDs.add(a.id);
+    if(!cleanId(a.anchor)||!asset.anchors?.some(p=>p.id===a.anchor))fail('Interaksi membutuhkan anchor aset yang tersedia');
+    if(a.kind==='surface'){
+      if(!Array.isArray(a.halfExtents)||a.halfExtents.length!==2||a.halfExtents.some(v=>!finite(v)||v<.04||v>15))fail('Ukuran permukaan tidak valid');
+    }else{
+      if(a.radius!==undefined&&(!finite(a.radius)||a.radius<.1||a.radius>4))fail('Jangkauan snap karakter tidak valid');
+      if(a.pose!==undefined&&!['standing','sitting','lying'].includes(a.pose))fail('Pose dukungan belum didukung');
+      if(a.yawOffset!==undefined&&(!finite(a.yawOffset)||Math.abs(a.yawOffset)>6.28319))fail('Yaw tidak valid');
+      if(a.heightOffset!==undefined&&(!finite(a.heightOffset)||Math.abs(a.heightOffset)>1))fail('Ketinggian tidak valid');
+    }
+  }
+  if(asset.movable!==undefined&&typeof asset.movable!=='boolean')fail('movable harus boolean');
+  const params=asset.parameters||{};
+  if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).length>20)fail('Parameter aset tidak valid');
+  for(const [key,value] of Object.entries(params))if(!cleanId(key)||!(typeof value==='boolean'||(typeof value==='string'&&value.length<=100)||(finite(value)&&Math.abs(value)<=100000)))fail('Nilai parameter tidak valid');
   if(asset.behaviorId!==undefined && asset.behaviorId!==null && !cleanId(asset.behaviorId)) fail('behaviorId tidak valid');
-  return {id:asset.id,name:asset.name.trim(),category:String(asset.category||'Buatan AI').slice(0,45),description:String(asset.description||'').slice(0,400),parts:copy(asset.parts),anchors:copy(asset.anchors||[]),behaviorId:asset.behaviorId||null,custom:true,version:Number.isInteger(asset.version)?asset.version:1};
+  return {id:asset.id,name:asset.name.trim(),category:String(asset.category||'Buatan AI').slice(0,45),description:String(asset.description||'').slice(0,400),parts:copy(asset.parts),anchors:copy(asset.anchors||[]),affordances:copy(affords),movable:asset.movable!==false,parameters:copy(params),behaviorId:asset.behaviorId||null,custom:true,version:Number.isInteger(asset.version)?asset.version:1};
 }
 function validateBehavior(b){
   if(!b||!cleanId(b.id)||typeof b.name!=='string'||b.name.length>90||!Array.isArray(b.states)||b.states.length<1||b.states.length>24) fail('Behavior membutuhkan id, nama, dan 1–24 state');
   const unique = [...new Set(b.states)];
   if(unique.length!==b.states.length||unique.some(s=>!cleanId(s))||!unique.includes(b.initial)) fail('State behavior tidak valid');
   if(!Array.isArray(b.transitions)||b.transitions.length>100) fail('Maksimal 100 transisi');
-  const edges=new Set();for(const t of b.transitions){if(!unique.includes(t.from)||!unique.includes(t.to)||!cleanId(t.action)||typeof t.label!=='string'||t.label.length<1||t.label.length>80) fail('Transisi behavior tidak valid');const key=t.from+'::'+t.action;if(edges.has(key)) fail('Transisi ambigu: aksi yang sama dari state yang sama');edges.add(key);if(t.effects!==undefined){if(!Array.isArray(t.effects)||t.effects.length>6)fail('Maksimal enam efek per transisi');for(const effect of t.effects){if(!effect||!['attach','detach','move'].includes(effect.type))fail('Efek behavior tidak didukung');if(effect.type==='attach'&&(!cleanId(effect.targetId)||!cleanId(effect.anchor)))fail('Target/anchor efek attach invalid');if(effect.type==='move'&&!vector(effect.position,30))fail('Posisi efek move invalid');}}}
+  const edges=new Set();for(const t of b.transitions){if(!unique.includes(t.from)||!unique.includes(t.to)||!cleanId(t.action)||typeof t.label!=='string'||t.label.length<1||t.label.length>80) fail('Transisi behavior tidak valid');const key=t.from+'::'+t.action;if(edges.has(key)) fail('Transisi ambigu: aksi yang sama dari state yang sama');edges.add(key);if(t.when!==undefined){
+    if(!Array.isArray(t.when)||t.when.length>6)fail('Maksimal enam syarat per transisi');
+    for(const guard of t.when)if(!guard||!cleanId(guard.key)||!['eq','gte','lte'].includes(guard.operator)||!(typeof guard.value==='boolean'||(typeof guard.value==='string'&&guard.value.length<=100)||(finite(guard.value)&&Math.abs(guard.value)<=100000)))fail('Syarat behavior tidak valid');
+  }
+  if(t.effects!==undefined){if(!Array.isArray(t.effects)||t.effects.length>6)fail('Maksimal enam efek per transisi');for(const effect of t.effects){if(!effect||!['attach','detach','move','set_parameter','adjust_parameter'].includes(effect.type))fail('Efek behavior tidak didukung');if(effect.type==='attach'&&(!cleanId(effect.targetId)||!cleanId(effect.anchor)))fail('Target/anchor efek attach invalid');if(effect.type==='move'&&!vector(effect.position,30))fail('Posisi efek move invalid');if(effect.type==='set_parameter'&&(!cleanId(effect.key)||!(typeof effect.value==='boolean'||(typeof effect.value==='string'&&effect.value.length<=100)||(finite(effect.value)&&Math.abs(effect.value)<=100000))))fail('Nilai set_parameter invalid');
+    if(effect.type==='adjust_parameter'&&(!cleanId(effect.key)||!finite(effect.delta)||Math.abs(effect.delta)>100000||[effect.min,effect.max].some(v=>v!==undefined&&!finite(v))||(effect.min!==undefined&&effect.max!==undefined&&effect.min>effect.max)))fail('Nilai adjust_parameter invalid');}}}
   const visuals=b.visuals||{};if(typeof visuals!=='object'||Array.isArray(visuals)||visuals===null||Object.keys(visuals).some(s=>!unique.includes(s)))fail('visuals harus berisi status yang ada');for(const spec of Object.values(visuals)){if(!spec||typeof spec!=='object'||Array.isArray(spec)||(spec.color!==undefined&&!color(spec.color))||(spec.scale!==undefined&&(!finite(spec.scale)||spec.scale<.3||spec.scale>3)))fail('visual state invalid');}
   return {id:b.id,name:b.name,states:unique,initial:b.initial,transitions:copy(b.transitions),visuals:copy(visuals),custom:true,version:Number.isInteger(b.version)?b.version:1};
+}
+// Reject broken AI equipment contracts at creation/update time, not after
+// the learner taps an action in the scene.
+function verifyAssetBehavior(asset,behaviors){
+ if(!asset.behaviorId)return;
+ const behavior=behaviors.find(b=>b.id===asset.behaviorId);
+ if(!behavior)fail('Behavior referensi tidak ada','NOT_FOUND');
+ const params=asset.parameters||{};
+ for(const transition of behavior.transitions){
+   for(const cond of transition.when||[]){
+     if(!Object.hasOwn(params,cond.key))fail(`Syarat '${cond.key}' tidak tersedia pada aset`,'INCOMPATIBLE_BEHAVIOR');
+     if(cond.operator==='eq'&&typeof params[cond.key]!==typeof cond.value)fail('Tipe parameter syarat tidak sesuai','INCOMPATIBLE_BEHAVIOR');
+     if(cond.operator!=='eq'&&(typeof params[cond.key]!=='number'||typeof cond.value!=='number'))fail('Syarat gte/lte membutuhkan angka','INCOMPATIBLE_BEHAVIOR');
+   }
+   for(const effect of transition.effects||[]){
+     if(effect.type==='set_parameter'&&(!Object.hasOwn(params,effect.key)||typeof params[effect.key]!==typeof effect.value))fail(`Parameter '${effect.key}' tidak kompatibel dengan behavior`,'INCOMPATIBLE_BEHAVIOR');
+     if(effect.type==='adjust_parameter'&&typeof params[effect.key]!=='number')fail(`Parameter '${effect.key}' harus berupa angka`,'INCOMPATIBLE_BEHAVIOR');
+   }
+ }
+}
+function upgradeBuiltInAffordances(state) {
+  const catalog=new Map(builtInAssets.filter(asset=>asset.affordances).map(asset=>[asset.id,asset.affordances]));
+  for(const asset of state.assets) {
+    const affordances=catalog.get(asset.id);
+    if(affordances && !asset.custom && asset.affordances===undefined) asset.affordances=copy(affordances);
+  }
 }
 // v0.2 saved the built-in grip rules alongside user assets and in undo snapshots.
 function upgradeBuiltInGrip(state) {
@@ -86,7 +149,10 @@ export class Studio {
     const loaded=state || {scene:defaultScene(),assets:builtInAssets,behaviors:builtInBehaviors};
     const current=copy(loaded);
     const {scene,assets,behaviors,log=[],undoStack=[],redoStack=[]}=current;
-    for (const entry of [current,...undoStack,...redoStack]) upgradeBuiltInGrip(entry);
+    for (const entry of [current,...undoStack,...redoStack]) {
+      upgradeBuiltInGrip(entry);
+      upgradeBuiltInAffordances(entry);
+    }
     Object.assign(this,{scene,assets,behaviors,log,undoStack,redoStack});
     this.listeners=new Set();
   }
@@ -100,16 +166,22 @@ export class Studio {
     const old=copy(this.current());const result=fn();this.scene.revision=old.scene.revision+1;try{this.persist()}catch(e){this.scene=old.scene;this.assets=old.assets;this.behaviors=old.behaviors;throw e;}
     this.undoStack.push(old);this.undoStack=this.undoStack.slice(-35);this.redoStack=[];const entry={at:new Date().toISOString(),label,revision:this.scene.revision};this.log.unshift(entry);this.log=this.log.slice(0,80);this.emit(entry);return {ok:true,revision:this.scene.revision,result};
   }
-  validateAssetDraft(input){const asset=validateAsset(input);if(this.assets.some(a=>a.id===asset.id))fail('ID aset sudah dipakai','CONFLICT');if(asset.behaviorId&&!this.behaviors.some(b=>b.id===asset.behaviorId))fail('Behavior referensi tidak ada');return {valid:true,asset,partCount:asset.parts.length};}
+  validateAssetDraft(input){const asset=validateAsset(input);if(this.assets.some(a=>a.id===asset.id))fail('ID aset sudah dipakai','CONFLICT');verifyAssetBehavior(asset,this.behaviors);return {valid:true,asset,partCount:asset.parts.length};}
   validateBehaviorDraft(input){const behavior=validateBehavior(input);if(this.behaviors.some(b=>b.id===behavior.id))fail('ID behavior sudah dipakai','CONFLICT');return {valid:true,behavior,transitionCount:behavior.transitions.length};}
   save(){this.persist();return {ok:true,revision:this.scene.revision,stored:this.hasPersistentStorage};}
-  createAsset(input){const asset=validateAsset(input);if(this.assets.some(a=>a.id===asset.id))fail('ID aset sudah dipakai','CONFLICT');if(asset.behaviorId&&!this.behaviors.some(b=>b.id===asset.behaviorId))fail('Behavior referensi tidak ada');return this.transaction(()=>{this.assets.push(asset);return asset},'create_asset');}
+  createAsset(input){const asset=validateAsset(input);if(this.assets.some(a=>a.id===asset.id))fail('ID aset sudah dipakai','CONFLICT');verifyAssetBehavior(asset,this.behaviors);return this.transaction(()=>{this.assets.push(asset);return asset},'create_asset');}
   createBehavior(input){const behavior=validateBehavior(input);if(this.behaviors.some(b=>b.id===behavior.id))fail('ID behavior sudah dipakai','CONFLICT');return this.transaction(()=>{this.behaviors.push(behavior);return behavior},'create_behavior');}
-  updateAsset(id,changes){const i=this.assets.findIndex(a=>a.id===id);if(i<0)fail('Aset tidak ditemukan','NOT_FOUND');if(!this.assets[i].custom)fail('Aset bawaan tidak bisa ditimpa; duplikasi dengan ID baru');const asset=validateAsset({...this.assets[i],...changes,id,version:this.assets[i].version+1});if(asset.behaviorId&&!this.behaviors.some(b=>b.id===asset.behaviorId))fail('Behavior tidak ditemukan');
+  updateAsset(id,changes){const i=this.assets.findIndex(a=>a.id===id);if(i<0)fail('Aset tidak ditemukan','NOT_FOUND');if(!this.assets[i].custom)fail('Aset bawaan tidak bisa ditimpa; duplikasi dengan ID baru');const asset=validateAsset({...this.assets[i],...changes,id,version:this.assets[i].version+1});verifyAssetBehavior(asset,this.behaviors);
+   for(const e of this.scene.entities.filter(e=>e.type==='asset'&&e.assetId===id))for(const [key,value] of Object.entries(e.parameters||{}))if(!Object.hasOwn(asset.parameters,key)||typeof asset.parameters[key]!==typeof value)fail(`Parameter '${key}' sedang digunakan`,'INCOMPATIBLE_UPDATE');
    const used=new Set(this.scene.entities.filter(e=>e.attachedTo&&this.scene.entities.some(parent=>parent.id===e.attachedTo&&parent.assetId===id)).map(e=>e.anchor));
    for(const anchor of used)if(!asset.anchors.some(a=>a.id===anchor))fail(`Anchor '${anchor}' masih dipakai oleh instrumen lain`,'INCOMPATIBLE_UPDATE');
-   return this.transaction(()=>{this.assets[i]=asset;return asset},'update_asset');}
+   for(const dependent of this.scene.entities.filter(e=>(e.supportedBy?.entityId||e.restingOn?.entityId)&&this.scene.entities.some(parent=>parent.id===(e.supportedBy?.entityId||e.restingOn?.entityId)&&parent.assetId===id))){
+     const affId=dependent.supportedBy?.affordanceId||dependent.restingOn?.affordanceId;
+     if(!asset.affordances.some(a=>a.id===affId&&a.kind===(dependent.type==='character'?(dependent.supportedBy?.kind||'seat'):'surface')))fail(`Interaksi '${affId}' masih digunakan oleh ${dependent.id}`,'INCOMPATIBLE_UPDATE');
+   }
+   return this.transaction(()=>{this.assets[i]=asset;for(const support of this.scene.entities.filter(e=>e.type==='asset'&&e.assetId===id))reflowSupported({scene:this.scene,assets:this.assets,poses:POSES},support.id);return asset},'update_asset');}
   updateBehavior(id,changes){const i=this.behaviors.findIndex(b=>b.id===id);if(i<0)fail('Behavior tidak ditemukan','NOT_FOUND');if(!this.behaviors[i].custom)fail('Behavior bawaan tidak bisa ditimpa');const b=validateBehavior({...this.behaviors[i],...changes,id,version:this.behaviors[i].version+1});
+   for(const asset of this.assets.filter(a=>a.behaviorId===id))verifyAssetBehavior(asset,[...this.behaviors.filter(v=>v.id!==id),b]);
    const assetIds=new Set(this.assets.filter(a=>a.behaviorId===id).map(a=>a.id));
    for(const e of this.scene.entities)if(e.type==='asset'&&assetIds.has(e.assetId)&&e.status&&!b.states.includes(e.status))fail(`Perilaku baru menghapus state aktif '${e.status}' pada ${e.id}`,'INCOMPATIBLE_UPDATE');
    return this.transaction(()=>{this.behaviors[i]=b;return b},'update_behavior');}
@@ -141,15 +213,69 @@ export class Studio {
       case 'spawn_character':{
         if(entities.length>=250)fail('Batas 250 objek');const id=op.id||uid('human');if(!cleanId(id)||entities.some(x=>x.id===id))fail('ID entity duplikat/tidak valid');const e={id,type:'character',role:op.role==='doctor'?'doctor':'patient',name:String(op.name||'Karakter').slice(0,65),position:op.position||[0,0,0],rotation:[0,0,0],pose:neutralPose()};if(!vector(e.position,30))fail('Posisi tidak valid');entities.push(e);return e;}
       case 'spawn_asset':{
-        if(entities.length>=250)fail('Batas 250 objek');const asset=this.assets.find(a=>a.id===op.assetId);if(!asset)fail(`Aset '${op.assetId}' tidak tersedia`,'NOT_FOUND');const id=op.id||uid('object');if(!cleanId(id)||entities.some(e=>e.id===id))fail('ID entity duplikat/tidak valid');const e={id,type:'asset',assetId:asset.id,name:asset.name,position:op.position||[0,0,0],rotation:op.rotation||[0,0,0],status:this.behaviors.find(b=>b.id===asset.behaviorId)?.initial||null};if(!vector(e.position,30)||!vector(e.rotation,7))fail('Transform tidak valid');entities.push(e);return e;}
-      case 'move_entity': {const e=entity();if(!vector(op.position,30))fail('Posisi tidak valid');e.position=copy(op.position);return e.id;}
-      case 'rotate_entity': {const e=entity();if(!vector(op.rotation,7))fail('Rotasi harus berupa 3 angka radian');e.rotation=copy(op.rotation);return e.id;}
-      case 'delete_entity': {const e=entity();if(e.id==='doctor'||e.id==='patient')fail('Karakter utama tidak dapat dihapus');this.scene.entities=entities.filter(x=>x.id!==e.id);this.scene.entities.forEach(x=>{if(x.attachedTo===e.id){delete x.attachedTo;delete x.anchor;}});return e.id;}
+        if(entities.length>=250)fail('Batas 250 objek');const asset=this.assets.find(a=>a.id===op.assetId);if(!asset)fail(`Aset '${op.assetId}' tidak tersedia`,'NOT_FOUND');const id=op.id||uid('object');if(!cleanId(id)||entities.some(e=>e.id===id))fail('ID entity duplikat/tidak valid');const e={id,type:'asset',assetId:asset.id,name:asset.name,position:op.position||[0,0,0],rotation:op.rotation||[0,0,0],status:this.behaviors.find(b=>b.id===asset.behaviorId)?.initial||null,parameters:copy(asset.parameters||{})};if(!vector(e.position,30)||!vector(e.rotation,7))fail('Transform tidak valid');entities.push(e);return e;}
+      case 'move_entity': {const e=entity();if(!vector(op.position,30))fail('Posisi tidak valid');
+       const def=this.assets.find(a=>a.id===e.assetId);if(e.type==='asset'&&def?.movable===false)fail('Objek ini dikunci untuk dipindah');
+       e.position=copy(op.position);delete e.supportedBy;delete e.restingOn;
+       if(e.type==='asset')reflowSupported({scene:this.scene,assets:this.assets,poses:POSES},e.id);
+       return e.id;}
+      case 'rotate_entity': {const e=entity();if(!vector(op.rotation,7))fail('Rotasi harus berupa 3 angka radian');
+       const def=this.assets.find(a=>a.id===e.assetId);if(e.type==='asset'&&def?.movable===false)fail('Objek ini dikunci untuk diputar');
+       const yawDelta=op.rotation[1]-e.rotation[1];
+       e.rotation=copy(op.rotation);if(e.type==='character')delete e.supportedBy;
+       if(e.type==='asset')reflowSupported({scene:this.scene,assets:this.assets,poses:POSES},e.id,yawDelta);
+       return e.id;}
+      case 'delete_entity': {const e=entity();if(e.id==='doctor'||e.id==='patient')fail('Karakter utama tidak dapat dihapus');this.scene.entities=entities.filter(x=>x.id!==e.id);this.scene.entities.forEach(x=>{if(x.attachedTo===e.id){delete x.attachedTo;delete x.anchor;}if(x.supportedBy?.entityId===e.id)delete x.supportedBy;if(x.restingOn?.entityId===e.id)delete x.restingOn;});return e.id;}
+      case 'place_character': {
+       const e=entity(),support=entities.find(x=>x.id===op.supportId);
+       if(e.type!=='character'||support?.type!=='asset'||e.id===support.id)fail('Karakter atau furniture pendukung tidak tersedia');
+       const a=affordancesFor(this.snapshot(),support).find(a=>a.id===op.affordanceId&&['seat','bed'].includes(a.kind));
+       if(!a)fail('Objek ini tidak menyediakan permukaan duduk/berbaring','UNSUPPORTED_AFFORDANCE');
+       const placement=characterPlacement(this.snapshot(),e,support,a);
+       if(!placement)fail('Pose atau anchor tidak tersedia','UNSUPPORTED_AFFORDANCE');
+       e.position=placement.position;e.rotation=placement.rotation;
+       e.pose=copy(POSES[placement.pose]);e.supportedBy={entityId:support.id,affordanceId:a.id,kind:a.kind};
+       return {entityId:e.id,supportId:support.id,kind:a.kind};
+      }
+      case 'place_asset': {
+       const e=entity(),support=entities.find(x=>x.id===op.supportId);
+       if(e.type!=='asset'||support?.type!=='asset'||e.id===support.id||e.attachedTo)fail('Instrumen atau permukaan penopang tidak valid');
+       requireAcyclicSupport(e,support,entities);
+       const a=affordancesFor(this.snapshot(),support).find(a=>a.id===op.affordanceId&&a.kind==='surface');
+       if(!a)fail('Objek tidak mempunyai permukaan peletakan','UNSUPPORTED_AFFORDANCE');
+       if(!Array.isArray(op.localOffset)||op.localOffset.length!==3||!op.localOffset.every(finite))fail('Offset penempatan tidak valid');
+       if(Math.abs(op.localOffset[0])>a.halfExtents[0]+.05||Math.abs(op.localOffset[2])>a.halfExtents[1]+.05||Math.abs(op.localOffset[1])>.2)fail('Objek di luar permukaan');
+       const pos=surfacePosition(this.snapshot(),e,support,a,op.localOffset);
+       if(!pos||!vector(pos,30))fail('Posisi tidak valid');
+       e.position=pos;e.restingOn={entityId:support.id,affordanceId:a.id,localOffset:copy(op.localOffset)};
+       reflowSupported({scene:this.scene,assets:this.assets,poses:POSES},e.id);
+       return {entityId:e.id,supportId:support.id,kind:'surface'};
+      }
       case 'set_joint': {const e=entity();if(e.type!=='character')fail('Sendi hanya tersedia untuk karakter');const j=e.pose[op.joint];if(!j||!Object.hasOwn(j,op.axis))fail('Sendi atau sumbu gerak tidak tersedia');if(!finite(op.angle)||op.angle< -180||op.angle>180)fail('Sudut harus -180 sampai 180 derajat');j[op.axis]=op.angle;return {entityId:e.id,joint:op.joint,axis:op.axis,angle:op.angle};}
-      case 'apply_pose': {const e=entity();if(e.type!=='character')fail('Pose hanya untuk karakter');const preset=POSES[op.presetId];if(!preset)fail('Pose preset tidak ditemukan');e.pose=copy(preset);return e.id;}
-      case 'attach':{const e=entity();const target=entities.find(x=>x.id===op.targetId);if(e.type!=='asset'||!target||e.id===target.id)fail('Target attach tidak valid');const visited=new Set([e.id]);let ptr=target;while(ptr?.attachedTo){if(visited.has(ptr.id))fail('Attachment melingkar');visited.add(ptr.id);ptr=entities.find(x=>x.id===ptr.attachedTo);}if(ptr&&visited.has(ptr.id))fail('Attachment melingkar');const anchor=String(op.anchor||'rightHand');requireAnchor(target,anchor,this.assets);e.attachedTo=target.id;e.anchor=anchor;return e.id;}
+      case 'apply_pose': {const e=entity();if(e.type!=='character')fail('Pose hanya untuk karakter');const preset=POSES[op.presetId];if(!preset)fail('Pose preset tidak ditemukan');e.pose=copy(preset);if(e.supportedBy){delete e.supportedBy;e.rotation[0]=0;e.position[1]=0;}return e.id;}
+      case 'attach':{const e=entity();const target=entities.find(x=>x.id===op.targetId);if(e.type!=='asset'||!target||e.id===target.id)fail('Target attach tidak valid');const visited=new Set([e.id]);let ptr=target;while(ptr?.attachedTo){if(visited.has(ptr.id))fail('Attachment melingkar');visited.add(ptr.id);ptr=entities.find(x=>x.id===ptr.attachedTo);}if(ptr&&visited.has(ptr.id))fail('Attachment melingkar');const anchor=String(op.anchor||'rightHand');requireAnchor(target,anchor,this.assets);delete e.restingOn;e.attachedTo=target.id;e.anchor=anchor;return e.id;}
       case 'detach':{const e=entity();delete e.attachedTo;delete e.anchor;return e.id;}
-      case 'trigger_action':{const e=entity();if(e.type!=='asset')fail('Aksi hanya untuk instrumen');const a=this.assets.find(a=>a.id===e.assetId);const b=this.behaviors.find(b=>b.id===a?.behaviorId);if(!b)fail('Instrumen tidak punya behavior');const t=b.transitions.find(t=>t.from===(e.status||b.initial)&&t.action===op.action);if(!t)fail(`Aksi '${op.action}' tidak tersedia pada state '${e.status}'`,'INVALID_TRANSITION');e.status=t.to;for(const effect of t.effects||[]){if(effect.type==='detach'){delete e.attachedTo;delete e.anchor;}if(effect.type==='attach'){const target=entities.find(v=>v.id===effect.targetId);if(!target||target.id===e.id)fail('Target efek attach tidak ada');const visited=new Set([e.id]);let ptr=target;while(ptr?.attachedTo){if(visited.has(ptr.id))fail('Attachment melingkar');visited.add(ptr.id);ptr=entities.find(v=>v.id===ptr.attachedTo);}if(ptr&&visited.has(ptr.id))fail('Attachment melingkar');requireAnchor(target,effect.anchor,this.assets);e.attachedTo=target.id;e.anchor=effect.anchor;}if(effect.type==='move'){e.position=copy(effect.position);}}return {entityId:e.id,status:e.status,attachedTo:e.attachedTo||null};}
+      case 'trigger_action':{const e=entity();if(e.type!=='asset')fail('Aksi hanya untuk instrumen');const a=this.assets.find(a=>a.id===e.assetId);const b=this.behaviors.find(b=>b.id===a?.behaviorId);if(!b)fail('Instrumen tidak punya behavior');const t=b.transitions.find(t=>t.from===(e.status||b.initial)&&t.action===op.action);if(!t)fail(`Aksi '${op.action}' tidak tersedia pada state '${e.status}'`,'INVALID_TRANSITION');
+        for(const guard of t.when||[]){
+         const current=e.parameters?.[guard.key];if(current===undefined)fail('Parameter syarat tidak tersedia','CONDITION_NOT_MET');
+         const matched=guard.operator==='eq'?current===guard.value:(typeof current==='number'&&typeof guard.value==='number'&&(guard.operator==='gte'?current>=guard.value:current<=guard.value));
+         if(!matched)fail(`Syarat '${guard.key}' tidak terpenuhi`,'CONDITION_NOT_MET');
+        }
+        e.status=t.to;for(const effect of t.effects||[]){if(effect.type==='detach'){delete e.attachedTo;delete e.anchor;}if(effect.type==='attach'){const target=entities.find(v=>v.id===effect.targetId);if(!target||target.id===e.id)fail('Target efek attach tidak ada');const visited=new Set([e.id]);let ptr=target;while(ptr?.attachedTo){if(visited.has(ptr.id))fail('Attachment melingkar');visited.add(ptr.id);ptr=entities.find(v=>v.id===ptr.attachedTo);}if(ptr&&visited.has(ptr.id))fail('Attachment melingkar');requireAnchor(target,effect.anchor,this.assets);delete e.restingOn;e.attachedTo=target.id;e.anchor=effect.anchor;}if(effect.type==='move'){e.position=copy(effect.position);delete e.restingOn;}
+        if(effect.type==='set_parameter'){
+         if(!Object.hasOwn(e.parameters||{},effect.key))fail(`Parameter '${effect.key}' belum didefinisikan`);
+         if(typeof e.parameters[effect.key]!==typeof effect.value)fail('Tipe parameter tidak sesuai');
+         e.parameters[effect.key]=effect.value;
+        }
+        if(effect.type==='adjust_parameter'){
+         if(!finite(e.parameters?.[effect.key]))fail('Parameter numerik tidak tersedia');
+         let next=e.parameters[effect.key]+effect.delta;
+         if(effect.min!==undefined)next=Math.max(effect.min,next);
+         if(effect.max!==undefined)next=Math.min(effect.max,next);
+         if(!finite(next)||Math.abs(next)>100000)fail('Hasil parameter di luar batas');
+         e.parameters[effect.key]=next;
+        }
+       }return {entityId:e.id,status:e.status,parameters:copy(e.parameters||{}),attachedTo:e.attachedTo||null};}
       case 'set_scenario':{const t=TEMPLATES.find(t=>t.id===op.templateId);if(!t)fail('Template skenario tidak dikenal');this.scene.scenario={...copy(t),completed:[]};return t.id;}
       case 'set_scenario_details':{const s=op.scenario;if(!s||typeof s.name!=='string'||s.name.length>100||!Array.isArray(s.steps)||s.steps.length>40||s.steps.some(x=>typeof x!=='string'||x.length>200))fail('Skenario tidak valid');this.scene.scenario={id:cleanId(s.id)?s.id:uid('scenario'),name:s.name,category:String(s.category||'Custom').slice(0,60),patient:copy(s.patient||{}),steps:copy(s.steps),note:String(s.note||'Konten generatif belum divalidasi secara klinis').slice(0,500),completed:[],generated:true};return this.scene.scenario.id;}
       case 'complete_step':case 'uncomplete_step':{const s=this.scene.scenario;if(!Number.isInteger(op.index)||op.index<0||op.index>=s.steps.length)fail('Indeks langkah tidak valid');s.completed=s.completed||[];if(op.type==='complete_step'&&!s.completed.includes(op.index))s.completed.push(op.index);if(op.type==='uncomplete_step')s.completed=s.completed.filter(n=>n!==op.index);return op.index;}
@@ -169,7 +295,7 @@ export class Studio {
       this.scene=before.scene;this.assets=before.assets;this.behaviors=before.behaviors;
       target.pop();source.push(next);throw error;
     }
-    const entry={at:new Date().toISOString(),label:direction,revision:this.scene.revision};this.log.unshift(entry);this.log=this.log.slice(0,80);this.emit(entry);
+    const entry={at:new Date().toISOString(),label:direction,revision:this.scene.revision};this.log.unshift(entry);this.emit(entry);
     return {ok:true,revision:this.scene.revision};
   }
   restore(snapshot,baseRevision){
@@ -189,6 +315,12 @@ export class Studio {
         const expected=neutralPose();if(!e.pose||typeof e.pose!=='object')fail('Pose karakter snapshot tidak tersedia');
         for(const [j,axes] of Object.entries(expected))for(const axis of Object.keys(axes))if(!finite(e.pose[j]?.[axis])||Math.abs(e.pose[j][axis])>180)fail('Sudut sendi snapshot tidak valid');
       }
+      if(e.type==='asset'){
+        const def=snapshot.assets.find(a=>a.id===e.assetId);
+        if(e.parameters!==undefined){
+         if(!e.parameters||typeof e.parameters!=='object'||Array.isArray(e.parameters)||Object.keys(e.parameters).some(k=>!Object.hasOwn(def.parameters||{},k)||typeof e.parameters[k]!==typeof def.parameters[k]))fail('Parameter instrumen snapshot tidak valid');
+        }
+      }
       if(e.type==='asset'&&e.status!==null&&e.status!==undefined){
         const a=snapshot.assets.find(x=>x.id===e.assetId),b=snapshot.behaviors.find(x=>x.id===a.behaviorId);
         if(!b?.states?.includes(e.status))fail('Status alat snapshot tidak valid');
@@ -200,6 +332,19 @@ export class Studio {
       requireAnchor(target,e.anchor,snapshot.assets);
       const seen=new Set([e.id]);let cursor=target;
       while(cursor){if(seen.has(cursor.id))fail('Attachment snapshot membentuk lingkaran');seen.add(cursor.id);cursor=entities.find(x=>x.id===cursor.attachedTo);}
+    }
+    for(const e of entities){
+      if(e.supportedBy){
+        if(e.type!=='character'||!cleanId(e.supportedBy.entityId)||!cleanId(e.supportedBy.affordanceId))fail('Dukungan karakter snapshot tidak valid');
+        const support=entities.find(x=>x.id===e.supportedBy.entityId);
+        if(support?.type!=='asset'||!snapshot.assets.find(a=>a.id===support.assetId)?.affordances?.some(a=>a.id===e.supportedBy.affordanceId&&['seat','bed'].includes(a.kind)))fail('Referensi permukaan karakter tidak valid');
+      }
+      if(e.restingOn){
+        if(e.type!=='asset'||!cleanId(e.restingOn.entityId)||!cleanId(e.restingOn.affordanceId)||!vector(e.restingOn.localOffset,20))fail('Penempatan instrumen snapshot tidak valid');
+        const support=entities.find(x=>x.id===e.restingOn.entityId);
+        if(support?.type!=='asset'||!snapshot.assets.find(a=>a.id===support.assetId)?.affordances?.some(a=>a.id===e.restingOn.affordanceId&&a.kind==='surface'))fail('Referensi permukaan instrumen tidak valid');
+        requireAcyclicSupport(e,support,entities);
+      }
     }
     const scenario=snapshot.scene.scenario;
     if(!scenario||typeof scenario.name!=='string'||scenario.name.length>100||!Array.isArray(scenario.steps)||scenario.steps.length>40||scenario.steps.some(x=>typeof x!=='string'||x.length>200)||!Array.isArray(scenario.completed)||scenario.completed.some(x=>!Number.isInteger(x)||x<0||x>=scenario.steps.length))fail('Skenario snapshot tidak valid');

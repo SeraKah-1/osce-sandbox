@@ -1,0 +1,17 @@
+{
+  "id": "custom-examination-bed",
+  "name": "Kasur Latihan Custom",
+  "category": "Furnitur",
+  "movable": true,
+  "parts": [
+    {"shape":"box","position":[0,0.48,0],"size":[2.05,0.2,0.85],"color":"#a7cad1"},
+    {"shape":"box","position":[0,0.60,0],"size":[2.05,0.08,0.85],"color":"#cfe4e7"},
+    {"shape":"box","position":[-0.83,0.24,0],"size":[0.08,0.46,0.75],"color":"#76959f"},
+    {"shape":"box","position":[0.83,0.24,0],"size":[0.08,0.46,0.75],"color":"#76959f"}
+  ],
+  "anchors": [{"id":"mattress","position":[0,0.64,0]}],
+  "affordances": [
+    {"id":"lie","kind":"bed","anchor":"mattress","radius":1.3,"pose":"lying","yawOffset":1.57079632679,"heightOffset":0.18},
+    {"id":"top","kind":"surface","anchor":"mattress","halfExtents":[1.0,0.39]}
+  ]
+}

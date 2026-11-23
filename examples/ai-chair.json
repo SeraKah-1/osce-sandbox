@@ -1,0 +1,14 @@
+{
+  "id": "custom-training-chair",
+  "name": "Kursi Latihan Custom",
+  "category": "Furnitur",
+  "movable": true,
+  "parts": [
+    {"shape":"box","position":[0,0.44,0],"size":[0.66,0.1,0.62],"color":"#a9d7c5"},
+    {"shape":"box","position":[0,0.8,-0.27],"size":[0.65,0.65,0.08],"color":"#90bdb1"},
+    {"shape":"box","position":[-0.24,0.22,-0.2],"size":[0.06,0.44,0.06],"color":"#6d8892"},
+    {"shape":"box","position":[0.24,0.22,0.2],"size":[0.06,0.44,0.06],"color":"#6d8892"}
+  ],
+  "anchors": [{"id":"seat","position":[0,0.51,0]}],
+  "affordances": [{"id":"sit","kind":"seat","anchor":"seat","radius":0.85,"pose":"sitting"}]
+}

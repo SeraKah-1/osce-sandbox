@@ -1,6 +1,6 @@
 import {createRenderer} from './render3d.js';
 
-// OSCE Playground v0.6. All scenes are temporary and movement is local-first.
+// OSCE Playground v0.7. All scenes are temporary and movement is local-first.
 // In an embedded app, mutations go through the host MCP bridge; no simulated AI responses.
 const $=id=>document.getElementById(id);
 const embedded=Boolean(window.__OSCE_EMBEDDED__);
@@ -12,7 +12,7 @@ const fmt=n=>Number(n||0).toFixed(2);
 const session=(()=>{try{return sessionStorage}catch{return {getItem:()=>null,setItem:()=>{}}}})();
 
 
-const DEFAULT_COMMAND='Buat ruang latihan OSCE yang sederhana. Atur dokter dan pasien, pose awal, serta alat yang diperlukan. Gunakan OSCE Sandbox Studio MCP: baca get_world_state dan get_asset_catalog terlebih dahulu; validasi aset/perilaku baru dan panggil preview_scene_operations untuk perubahan besar; lalu terapkan perubahan dengan baseRevision yang terbaru. Jelaskan keterbatasan simulasi klinis.';
+const DEFAULT_COMMAND='Buat ruang latihan OSCE yang sederhana. Atur dokter dan pasien, pose awal, serta alat yang diperlukan. Gunakan OSCE Sandbox Studio MCP: baca get_world_state dan get_asset_catalog terlebih dahulu; validasi aset/perilaku baru dan panggil preview_scene_operations untuk perubahan besar; lalu terapkan perubahan dengan baseRevision yang terbaru. Jika perlu, gunakan affordances seat, bed atau surface untuk furnitur baru. Jelaskan keterbatasan simulasi klinis.';
 let data=null,selected=null,selectedJoint=null,pane=null,category='all',selectionExpanded=false;
 let queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false,sessionId=null,remoteDirty=false,remoteRevision=0,eventAbort=null,sessionClosed=false;
 let lastError='',renderer,toastTimer,hostReady=false,hostKind='local',frameReady=false;
@@ -52,7 +52,7 @@ window.addEventListener('message',event=>{
 async function initializeBridge(){
  if(!embedded||hostReady||previewHost)return;
  if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}
- try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.6.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
+ try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.7.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
  catch(err){if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}if(previewHost){hostKind='local-preview';hostReady=false;return;}throw Error('Koneksi host ChatGPT belum tersedia: '+err.message);}
 }
 async function tool(name,args={}){
@@ -95,10 +95,10 @@ function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||
  if(e.type==='character'){
   const joint=selectedJoint&&e.pose[selectedJoint]?selectedJoint:null;
   const label=joint?friendlyJoint(joint):'Seluruh tubuh';
-  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${esc(label)} · seret boneka langsung di layar</span></div><div class="row-actions"><button class="soft-button" data-operation="rotate-left" title="Putar boneka 30 derajat ke kiri">↶ Putar</button><button class="soft-button" data-operation="rotate-right" title="Putar boneka 30 derajat ke kanan">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Tarik dada untuk memindahkan tubuh. Tarik pergelangan tangan atau kaki untuk mengatur pose. Lepaskan untuk membekukan posisi.</p>`;
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${esc(e.supportedBy?(e.supportedBy.kind==='bed'?'Berbaring':'Duduk')+' · '+label:label)} · seret boneka langsung di layar</span></div><div class="row-actions"><button class="soft-button" data-operation="rotate-left" title="Putar boneka 30 derajat ke kiri">↶ Putar</button><button class="soft-button" data-operation="rotate-right" title="Putar boneka 30 derajat ke kanan">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Tarik dada untuk memindahkan tubuh. Tarik pergelangan tangan atau kaki untuk mengatur pose. Lepaskan untuk membekukan posisi.</p>`;
  }else{
-  const b=behavior(e),actions=(b?.transitions||[]).filter(t=>t.from===(e.status??b?.initial));
-  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>Seret objek untuk memindahkan</span></div>${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button>${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
+  const a=blueprint(e),b=behavior(e),actions=(b?.transitions||[]).filter(t=>t.from===(e.status??b?.initial));
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${a?.movable===false?'Objek tidak bisa dipindahkan':'Seret objek langsung untuk memindahkan'}</span></div>${Object.keys(e.parameters||{}).length?`<p class="hint">${Object.entries(e.parameters).map(([k,v])=>esc(k)+': '+esc(String(v))).join(' · ')}</p>`:''}${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}${a?.movable===false?'':`<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div>`}${(a?.affordances||[]).length?'':`<div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button></div>`}<div class="row-actions">${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
  }
 }
 const navTitles={add:['ADD TO WORLD','Tambah objek'],ask:['AI BUILDER','Ask ChatGPT'],practice:['PRACTICE','Latihan OSCE'],more:['WORKSPACE','Pengaturan'],objects:['SCENE TREE','Semua objek'],advanced:['ADVANCED','Asset & Behavior'],diagnostics:['CONNECTION','Status & diagnostik']};
@@ -224,7 +224,7 @@ async function startFreshSession({useHostResult=false}={}){
  const start=await api('/api/session','POST',{});applyData(start);listenSessionEvents();
 }
 function safeID(prefix){return prefix+'-'+(globalThis.crypto?.randomUUID?.().slice(0,8)||Math.random().toString(36).slice(2,10));}
-function spawnPosition(furniture){const offset=(data?.scene.entities.length||0)%6;return furniture?[0.6+offset*.22,0,-.7+offset*.21]:[0.35+offset*.19,.82,.4+offset*.14];}
+function spawnPosition(furniture){const offset=(data?.scene.entities.length||0)%6;return furniture?[0.7+offset*.22,0,-.7+offset*.21]:[0.35+offset*.19,.82,.4+offset*.14];}
 async function execute(kind,payload){const e=currentEntity();try{
  switch(kind){
   case 'spawn-character':{const role=payload;const id=safeID('human');await mutate([{type:'spawn_character',id,role,name:role==='doctor'?'Dokter baru':'Pasien baru',position:role==='doctor'?[-1.7,0,1.3]:[1.1,0,1.3]}]);choose(id);stopPane();notice('Boneka ditambahkan');break;}
@@ -278,11 +278,17 @@ try{renderer=createRenderer($('scene3d'),$('hotspots'),{
  onRendererStatus:setRendererStatus,onRendererError:e=>showError('Renderer bermasalah',e.message),
  onSelect(id,joint){choose(id,joint);},
  onPreviewPose(id,joint,pose,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MENGATUR POSE · '+friendlyJoint(joint);if(g?.reachLimit||g?.ikError>.12)$('interactionHint').textContent='Batas jangkauan sendi · tarik target lebih dekat';}},
- onPreviewPosition(id,p,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');if(g?.snap)$('interactionHint').textContent='Lepas untuk menaruh alat di '+g.snap.supportName;if(g?.seat)$('interactionHint').textContent='Lepas untuk mendudukkan pasien di kursi';}},
+ onPreviewPosition(id,p,g){if(selected===id){const title=$('selectionKicker');if(title)title.textContent='MEMINDAHKAN · '+p.map(fmt).join(' / ');if(g?.snap)$('interactionHint').textContent='Lepas untuk menaruh alat di '+g.snap.supportName;if(g?.characterSnap)$('interactionHint').textContent=g.characterSnap.kind==='bed'?'Lepas untuk membaringkan pasien di '+g.characterSnap.supportName:'Lepas untuk mendudukkan pasien di '+g.characterSnap.supportName;
+  if(data.scene.entities.some(e=>e.supportedBy?.entityId===id||e.restingOn?.entityId===id))$('interactionHint').textContent='Geser furnitur · pasien dan alat di atasnya ikut bergerak';}},
  onGesture(phase,hit){if(phase==='start'){if(hit){selectionExpanded=false;renderSelection();}dragActive=!!hit;document.body.classList.toggle('puppet-dragging',!!hit);const attached=hit&&data?.scene?.entities.find(e=>e.id===hit.entityId)?.attachedTo;$('interactionHint').textContent=attached?'Objek terpasang · buka tindakan objek untuk melepas':hit?.kind==='pose'?'Tarik tangan/kaki · Lepas untuk membekukan':hit?'Geser objek · Lepas untuk menyimpan':'Geser ruang kosong untuk memutar kamera';}
   if(phase==='camera'){$('interactionHint').textContent='Pose tetap · dua jari untuk zoom dan geser kamera';dragActive=true;}
   if(phase==='end'||phase==='cancel'){dragActive=false;setTimeout(()=>{if(remoteDirty&&!dragActive&&!inFlight&&remoteRevision>(data?.scene?.revision||0)){remoteDirty=false;remoteRevision=0;reload({quiet:true}).catch(()=>{});}},80);document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
- onCommitOperations(operations){mutate(operations,{gesture:true}).catch(()=>{});}
+ onCommitOperations(operations){
+  const pose=operations.find(o=>o.type==='place_character');
+  const asset=operations.find(o=>o.type==='place_asset');
+  const label=pose?(data?.assets.find(a=>a.id===data?.scene.entities.find(e=>e.id===pose.supportId)?.assetId)?.affordances?.find(a=>a.id===pose.affordanceId)?.kind==='bed'?'Pasien berbaring':'Pasien duduk'):asset?'Alat diletakkan di permukaan':null;
+  mutate(operations,{gesture:true}).then(()=>{if(label)notice(label);}).catch(()=>{});
+ }
 
 });}catch(err){showError('Grafis tidak dapat dimulai',err.message);loadingFailure(err.message);}
 

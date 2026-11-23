@@ -1,7 +1,7 @@
 {
   "name": "osce-sandbox-studio",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "Deployable tablet-first 3D OSCE studio with transient in-memory sessions, local-first touch posing and MCP App UI",
   "scripts": {

@@ -6,9 +6,9 @@ export function renderWidget(assets){
  const index=assets['index.html'];
  const css=assets['styles.css'].replace(/<\/style/gi,'<\\/style');
  const ik=`const __ik3d=(()=>{${unexport(assets['ik3d.js'])}\nreturn {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3};})();`;
- const placement=`const __placement=(()=>{${unexport(assets['placement.js'])}\nreturn {placementCandidate,chairCandidate};})();`;
+ const placement=`const __placement=(()=>{${unexport(assets['placement.js'])}\nreturn {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported};})();`;
  const touchSource=unexport(assets['touch-pose.js']).replace(/^import .*?;\s*/gm,'');
- const touch=`const {installDirectTouch}=(()=>{const {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3}=__ik3d;const {placementCandidate,chairCandidate}=__placement;\n${touchSource}\nreturn {installDirectTouch};})();`;
+ const touch=`const {installDirectTouch}=(()=>{const {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3}=__ik3d;const {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported}=__placement;\n${touchSource}\nreturn {installDirectTouch};})();`;
  const graphics=unexport(assets['render3d.js']).replace(/^import .*?;\s*/gm,'');
  const ui=assets['app.js'].replace(/^import \{createRenderer\} from '\.\/render3d\.js';\s*/,'');
  const js=("window.__OSCE_EMBEDDED__=true;\n"+ik+'\n'+placement+'\n'+touch+'\n'+graphics+'\n'+ui).replace(/<\/script/gi,'<\\/script');

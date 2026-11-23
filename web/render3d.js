@@ -53,7 +53,8 @@ export function capsule(rings=14,sides=40){
 }
 function between(a,b,r){const direction=norm(sub(b,a)),axis=Math.abs(direction[2])>.92?[0,1,0]:[0,0,1];const right=norm(cross(axis,direction)),forward=norm(cross(direction,right));const center=mulv(add(a,b),.5),h=length(sub(b,a));return [right[0]*r,right[1]*r,right[2]*r,0,direction[0]*h,direction[1]*h,direction[2]*h,0,forward[0]*r,forward[1]*r,forward[2]*r,0,...center,1];}
 export function characterSkeleton(e){
- const pose=e.pose||{}, root=chain(translate(...e.position),rotY(e.rotation?.[1]||0));const hip=pt(root,[0,.95,0]);
+ const pose=e.pose||{};const pivot=.95;
+ const root=chain(translate(...e.position),translate(0,pivot,0),rotY(e.rotation?.[1]||0),rotX(e.rotation?.[0]||0),rotZ(e.rotation?.[2]||0),translate(0,-pivot,0));const hip=pt(root,[0,.95,0]);
  const spine=chain(root,translate(0,.95,0),rotX(rad(pose.spine?.flexion||0)),rotY(rad(pose.spine?.rotation||0)));
  const chest=pt(spine,[0,.40,0]),neck=pt(spine,[0,.57,0]);
  const head=pt(chain(spine,translate(0,.65,0),rotX(rad(pose.neck?.flexion||0)),rotY(rad(pose.neck?.rotation||0))),[0,.10,0]);
@@ -229,7 +230,7 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
      for(const seg of old.segments)line(seg.a,seg.b,clamp(seg.r*870/camera.distance,7,24),'#92aeb1');
      circle(old.joints.head,.19,'#a7bdba');ctx.restore();
    }}
-   for(const e of entities.filter(e=>e.type==='character')){const sk=characterSkeleton(e);jointWorld[e.id]=sk.joints;const clr=e.role==='doctor'?'#62aa96':'#dca887',detail=e.role==='doctor'?'#4b8e7c':'#c18d73';
+   const paintCharacter=e=>{const sk=characterSkeleton(e);jointWorld[e.id]=sk.joints;const clr=e.role==='doctor'?'#62aa96':'#dca887',detail=e.role==='doctor'?'#4b8e7c':'#c18d73';
      for(const s of sk.segments){if(['torso','neck'].includes(s.part))continue;line(s.a,s.b,clamp(s.r*990/camera.distance,9,32),clr);}
      line(sk.joints.hip,sk.joints.chest,clamp(96/camera.distance,13,28),clr);
      line(sk.joints.chest,sk.joints.neck,clamp(68/camera.distance,9,19),clr);
@@ -242,10 +243,15 @@ function createFallbackRenderer(canvas,overlay,callbacks={}){
      }
      if(selected===e.id){projected.push({entityId:e.id,joint:'neck',screen:project(sk.joints.neck)});projected.push({entityId:e.id,joint:'spine',screen:project(sk.joints.chest)});}
      for(const p of Object.values(sk.joints))projected.push({entityId:e.id,screen:project(p)});
-   }
+   };
+   for(const e of entities.filter(e=>e.type==='character'&&!e.supportedBy))paintCharacter(e);
    for(const e of entities.filter(e=>e.type==='asset')){const asset=world.assets.find(a=>a.id===e.assetId);if(!asset)continue;const p=resolveWorld(e);const matrix=chain(translate(...p),rotY(e.rotation?.[1]||0));const visual=stateVisual(world,e,asset);for(const part of asset.parts){const at=pt(matrix,part.position),size=part.size.map(x=>x*(visual.scale||1)),clr=visual.color||part.color;if(part.shape==='box'){box3d(chain(matrix,translate(...part.position)),size,clr);}else if(part.shape==='sphere'){circle(at,Math.max(...size)*.55,clr);}else{line(pt(chain(matrix,translate(...part.position)),[0,-size[1]/2,0]),pt(chain(matrix,translate(...part.position)),[0,size[1]/2,0]),clamp(size[0]*180/camera.distance,3,28),clr);}}
      projected.push({entityId:e.id,screen:project(p)});if(selected===e.id)circle(p,.11,'#51d3c5','#187c88');
    }
+   // Canvas2D has no depth buffer. Draw a character known to be resting on
+   // furniture after that furniture, so the mattress never hides the patient.
+   // WebGL instead uses genuine depth testing.
+   for(const e of entities.filter(e=>e.type==='character'&&e.supportedBy))paintCharacter(e);
    const known=new Set();for(const v of projected.filter(x=>x.joint&&x.joint===activeJoint&&x.screen.visible)){const id=v.entityId+'-'+v.joint;known.add(id);let el=[...overlay.children].find(el=>el.dataset.marker===id);if(!el){el=document.createElement('div');el.className='joint-marker';el.dataset.marker=id;overlay.append(el);}el.style.transform=`translate(${v.screen.x}px,${v.screen.y}px)`;el.classList.toggle('active',v.joint===activeJoint);}for(const el of [...overlay.children])if(!known.has(el.dataset.marker))el.remove();
  }
  requestAnimationFrame(render);}

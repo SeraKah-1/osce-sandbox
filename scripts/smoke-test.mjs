@@ -12,7 +12,7 @@ const mcp=async(method,params={})=>{
  const v=await api('/mcp','POST',{jsonrpc:'2.0',id:23,method,params});
  if(v.error||v.result?.isError)throw Error(JSON.stringify(v.error||v.result));return v.result;
 };
-const health=await api('/health');if(health.persistence!==false||health.version!=='0.6.0')throw Error(`Wrong server at ${base}: expected v0.6 RAM-only sessions; got ${JSON.stringify(health)}. Set STUDIO_URL to the active v0.6 server.`);
+const health=await api('/health');if(health.persistence!==false||health.version!=='0.7.0')throw Error(`Wrong server at ${base}: expected v0.7 RAM-only sessions; got ${JSON.stringify(health)}. Set STUDIO_URL to the active v0.7 server.`);
 const start=await api('/api/session','POST',{});const id=start.sessionId;
 try{
  const list=(await mcp('tools/list')).tools;
@@ -25,5 +25,14 @@ try{
  if(mutation.revision!==1)throw Error('MCP write not applied');
  const latest=await api('/api/state','GET',undefined,{'X-Studio-Session':id});
  if(latest.scene.entities.find(e=>e.id==='patient').pose.rightElbow.flexion!==45)throw Error('Tablet state not updated');
- console.log(JSON.stringify({ok:true,ephemeral:true,tools:list.length,resource:WIDGET_URI,sessionId:id,revision:latest.scene.revision},null,2));
+ // A character can be placed on a support and follows furniture moved by ChatGPT.
+ const lying=(await mcp('tools/call',{name:'apply_scene_operations',arguments:{sessionId:id,baseRevision:1,operations:[{type:'place_character',entityId:'patient',supportId:'bed-1',affordanceId:'lie'}]}})).structuredContent;
+ if(lying.revision!==2)throw Error('Bed placement failed');
+ const moved=(await mcp('tools/call',{name:'apply_scene_operations',arguments:{sessionId:id,baseRevision:2,operations:[{type:'move_entity',entityId:'bed-1',position:[3,0,-2]}]}})).structuredContent;
+ if(moved.revision!==3)throw Error('Furniture move failed');
+ const active=await api('/api/state','GET',undefined,{'X-Studio-Session':id});
+ const char=active.scene.entities.find(e=>e.id==='patient');
+ if(char.supportedBy?.entityId!=='bed-1'||Math.abs(char.position[0]-3)>1e-5)throw Error('Patient must follow the moved bed');
+
+ console.log(JSON.stringify({ok:true,ephemeral:true,tools:list.length,resource:WIDGET_URI,sessionId:id,revision:active.scene.revision},null,2));
 }finally{await api('/api/session','DELETE',undefined,{'X-Studio-Session':id});}
