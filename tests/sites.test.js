@@ -47,7 +47,7 @@ const operate=(request,session,title,revision=0)=>request('/api/operations',{
   method:'POST',user:'a',session,payload:{baseRevision:revision,operations:[{type:'rename_scene',title}]},
 });
 
-test('Sites serves v0.9 browser modules and the embedded editor with 25 MCP tools',async()=>{
+test('Sites serves v1.1 browser modules and the embedded editor with 25 MCP tools',async()=>{
   const {request}=fixture();
   assert.deepEqual((await rpc(request,'server/discover')).result.supportedVersions,['2026-07-28']);
   const tools=(await rpc(request,'tools/list')).result.tools;
@@ -77,7 +77,7 @@ test('tablet and MCP share only the same active session and preserve archived v0
   const {request,objects}=fixture();
   const first=await create(request);
   const fresh=(await call(request,'open_studio')).structuredContent;
-  assert.equal(fresh.studioVersion,'0.9.0');
+  assert.equal(fresh.studioVersion,'1.1.0');
   assert.notEqual(first.sessionId,fresh.sessionId);
   assert.equal(first.scene.revision,0);
   assert.equal(fresh.scene.revision,0);
@@ -200,4 +200,28 @@ test('hosted environment revisions block competing editors while durable undo an
   assert.equal((await call(request,'get_environment',{environmentId})).structuredContent.snapshot.scene.title,'My Studio');
   assert.equal((await call(request,'redo_environment',{environmentId})).isError,false);
   assert.equal((await call(request,'get_environment',{environmentId})).structuredContent.snapshot.scene.title,saved);
+});
+
+test('hosted retries deduplicate temporary gestures and durable MCP edits',async()=>{
+  const {request}=fixture();
+  const {sessionId}=await create(request);
+  const temporary={baseRevision:0,operationId:'tablet-retry-test',operations:[{type:'spawn_asset',assetId:'chair',position:[0,0,1]}]};
+  const post=payload=>request('/api/operations',{user:'a',session:sessionId,method:'POST',payload}).then(r=>r.json());
+  const first=await post(temporary);
+  const second=await post(temporary);
+  assert.equal(first.delta.upserts.length,1);
+  assert.equal(second.deduplicated,true);
+  assert.equal(first.revision,second.revision);
+  const loaded=(await call(request,'create_environment',{name:'Retry test',sessionId})).structuredContent;
+  const command={sessionId,baseRevision:loaded.scene.revision,operationId:'blueprint-retry-test',
+    operations:[{type:'spawn_asset',assetId:'chair',position:[1,0,0]}]};
+  const saved=(await call(request,'apply_scene_operations',command)).structuredContent;
+  const retry=(await call(request,'apply_scene_operations',command)).structuredContent;
+  assert.equal(saved.autoSaved,true);
+  assert.equal(retry.deduplicated,true);
+  assert.equal(retry.environment.revision,saved.environment.revision);
+  const snapshot=(await call(request,'get_environment',{environmentId:loaded.environment.id})).structuredContent.snapshot;
+  assert.equal(snapshot.scene.entities.filter(e=>e.assetId==='chair').length,1);
+  const conflicting=await call(request,'apply_scene_operations',{...command,operations:[{type:'rename_scene',title:'Different'}]});
+  assert.match(conflicting.content[0].text,/IDEMPOTENCY_CONFLICT/);
 });

@@ -29,7 +29,7 @@ test('stdio MCP can create, persist, reload and delete environments across adapt
   let mcp=start(directory);
   try{
     const init=await mcp.request('initialize');
-    assert.equal(init.result.serverInfo.version,'0.9.0');
+    assert.equal(init.result.serverInfo.version,'1.1.0');
     const tools=await mcp.request('tools/list');
     assert.ok(tools.result.tools.some(t=>t.name==='delete_environment'));
     const created=await mcp.request('tools/call',{name:'create_environment',arguments:{name:'Uji stdio'}});

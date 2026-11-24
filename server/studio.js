@@ -1,3 +1,5 @@
+import {diffWorld} from '../web/scene-delta.js';
+import {applyCouplings} from '../web/coupling.js';
 import {characterPlacement,characterPlacementCandidate,surfacePosition,reflowSupported,affordancesFor} from '../web/placement.js';
 
 export class SceneError extends Error {
@@ -35,7 +37,17 @@ const builtInAssets = [
   {id:'table',name:'Meja Instrumen',category:'Furnitur',parts:[{shape:'box',position:[0,.7,0],size:[.9,.07,.55],color:'#8eacb3'},{shape:'box',position:[-.35,.36,-.19],size:[.06,.68,.06],color:'#617b84'},{shape:'box',position:[.35,.36,.19],size:[.06,.68,.06],color:'#617b84'}],anchors:[{id:'top',position:[0,.77,0]}],affordances:[{id:'top',kind:'surface',anchor:'top',halfExtents:[.44,.27]}]},
   {id:'stethoscope',name:'Stetoskop',category:'Alat',parts:[{shape:'cylinder',position:[0,.14,0],size:[.065,.28,.065],color:'#3186aa'},{shape:'sphere',position:[0,-.06,0],size:[.12,.035,.12],color:'#bdcbd3'},{shape:'sphere',position:[0,.29,0],size:[.065,.055,.06],color:'#dbe4ea'}],anchors:[{id:'grip',position:[0,.18,0]}],behaviorId:'attach-basic'},
   {id:'cuff',legacyOnly:true,name:'Manset Tensimeter',category:'Alat',parts:[{shape:'box',position:[0,0,0],size:[.32,.16,.17],color:'#317fa9'},{shape:'box',position:[.24,-.02,0],size:[.15,.08,.13],color:'#425c72'}],anchors:[{id:'grip',position:[0,0,0]}],behaviorId:'cuff-behavior'},
-  {id:'goniometer',name:'Goniometer',category:'Alat',parts:[{shape:'box',position:[-.18,0,0],size:[.40,.018,.035],color:'#e2bb6d'},{shape:'box',position:[.13,0,.13],size:[.035,.018,.37],color:'#dfac55'},{shape:'sphere',position:[0,.01,0],size:[.045,.02,.045],color:'#c48d3a'}],anchors:[{id:'pivot',position:[0,0,0]}]},
+  {id:'goniometer',name:'Goniometer mekanis',category:'Alat',description:'Model latihan membaca sudut dari engsel, bukan pengukur rentang gerak pasien otomatis.',parts:[
+   {id:'fixed-arm',shape:'box',position:[.19,.018,0],size:[.38,.032,.040],color:'#e2bb6d'},
+   {id:'moving-arm',shape:'box',position:[.19,.038,0],size:[.38,.029,.037],color:'#d69e48'},
+   {id:'pivot-head',shape:'cylinder',position:[0,.050,0],size:[.078,.028,.078],color:'#c48d3a'},
+   {id:'dial-ring',shape:'torus',position:[0,.064,0],size:[.11,.012,.11],rotation:[Math.PI/2,0,0],color:'#f7e0a8'}
+  ],mechanisms:[{id:'arm-angle',label:'Lengan pengukur',kind:'hinge',partIds:['moving-arm'],pivot:[0,0,0],axis:[0,1,0],min:0,max:180,initial:0}],anchors:[{id:'pivot',position:[0,.05,0]}],
+  learning:{title:'Kenali gerakan goniometer',note:'Latihan ini memeriksa perubahan mekanisme 3D, bukan akurasi pengukuran pasien.',steps:[
+    {id:'open-30',instruction:'Tarik lengan yang bergerak hingga sekitar 30°.',condition:{kind:'mechanism_range',mechanismId:'arm-angle',min:27,max:33}},
+    {id:'open-90',instruction:'Lanjutkan hingga sekitar 90°.',condition:{kind:'mechanism_range',mechanismId:'arm-angle',min:87,max:93}},
+    {id:'return-0',instruction:'Kembalikan lengan ke posisi awal (0°).',condition:{kind:'mechanism_range',mechanismId:'arm-angle',min:0,max:3}}
+  ]}},
   {id:'tourniquet',legacyOnly:true,name:'Tourniquet Latihan',category:'Alat',parts:[{shape:'box',position:[0,0,0],size:[.48,.05,.10],color:'#4d9dc0'},{shape:'box',position:[.20,.02,0],size:[.10,.08,.12],color:'#c3dce4'}],anchors:[{id:'grip',position:[0,0,0]}],behaviorId:'tourniquet-behavior'},
   {id:'flashlight',legacyOnly:true,name:'Senter',category:'Alat',parts:[{shape:'cylinder',position:[0,0,0],size:[.058,.27,.058],color:'#2a668b'},{shape:'sphere',position:[0,.15,0],size:[.075,.035,.075],color:'#fce3a0'}],anchors:[{id:'grip',position:[0,0,0]}],behaviorId:'light-behavior'},
   {id:'reflex-hammer',name:'Palu Refleks',category:'Alat',parts:[{shape:'cylinder',position:[0,0,0],size:[.035,.39,.035],color:'#b7a17d'},{shape:'box',position:[0,.18,0],size:[.27,.095,.10],color:'#324857'}],anchors:[{id:'grip',position:[0,-.13,0]}]},
@@ -86,12 +98,28 @@ function validateAsset(asset){
     if(m.kind==='button'&&Math.abs(m.min)>.00001)fail('Tombol harus memiliki min=0');
     if(m.parentId!==undefined&&!cleanId(m.parentId))fail('Parent mekanisme tidak valid');
     if(m.triggers!==undefined&&(!m.triggers||typeof m.triggers!=='object'||Array.isArray(m.triggers)||Object.keys(m.triggers).some(x=>!['min','max'].includes(x)||!cleanId(m.triggers[x]))))fail('Trigger mekanisme tidak valid');
+    if(m.drives!==undefined&&(!Array.isArray(m.drives)||m.drives.length>12||m.drives.some(d=>!cleanId(d?.mechanismId)||!finite(d.ratio)||Math.abs(d.ratio)>20||(d.offset!==undefined&&(!finite(d.offset)||Math.abs(d.offset)>360)))))fail('Definisi penggerak mekanisme tidak valid');
     for(const id of m.partIds){if(controlledParts.has(id))fail('Bagian alat hanya boleh dimiliki satu mekanisme');controlledParts.add(id);}
     mIDs.add(m.id);
   }
   for(const m of mechanisms){if(m.parentId&&!mIDs.has(m.parentId))fail('Parent mekanisme tidak ditemukan');const seen=new Set([m.id]);let cursor=m;while(cursor.parentId){if(seen.has(cursor.parentId))fail('Mekanisme membentuk siklus');seen.add(cursor.parentId);cursor=mechanisms.find(x=>x.id===cursor.parentId);if(!cursor)break;}}
+  const driveStates=new Map(),drivenTargets=new Set(),driveById=new Map(mechanisms.map(m=>[m.id,m]));
+  for(const m of mechanisms)for(const d of m.drives||[]){
+    if(!driveById.has(d.mechanismId)||d.mechanismId===m.id)fail('Target penggerak tidak valid');
+    if(drivenTargets.has(d.mechanismId))fail('Satu bagian alat tidak boleh dikendalikan dua penggerak');
+    drivenTargets.add(d.mechanismId);
+  }
+  const checkDrive=node=>{
+    const state=driveStates.get(node.id);
+    if(state===1)fail('Rangkaian penggerak membentuk siklus');
+    if(state===2)return;
+    driveStates.set(node.id,1);
+    for(const d of node.drives||[])checkDrive(driveById.get(d.mechanismId));
+    driveStates.set(node.id,2);
+  };
+  for(const m of mechanisms)checkDrive(m);
 
-  if(asset.anchors!==undefined){if(!Array.isArray(asset.anchors)||asset.anchors.length>30||asset.anchors.some(a=>!cleanId(a.id)||!vector(a.position,20))) fail('Anchor aset tidak valid');}
+  if(asset.anchors!==undefined){if(!Array.isArray(asset.anchors)||asset.anchors.length>30||asset.anchors.some(a=>!cleanId(a.id)||!vector(a.position,20)||(a.partId!==undefined&&!partIDs.has(a.partId)))) fail('Anchor aset tidak valid');}
   const affords=asset.affordances||[];
   if(!Array.isArray(affords)||affords.length>12)fail('Maksimal 12 interaksi permukaan per aset');
   const affIDs=new Set();
@@ -112,8 +140,44 @@ function validateAsset(asset){
   const params=asset.parameters||{};
   if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).length>20)fail('Parameter aset tidak valid');
   for(const [key,value] of Object.entries(params))if(!cleanId(key)||!(typeof value==='boolean'||(typeof value==='string'&&value.length<=100)||(finite(value)&&Math.abs(value)<=100000)))fail('Nilai parameter tidak valid');
+  // Structured learning is attached to real component actions, never a click-to-complete mock.
+  const learning=asset.learning;
+  if(learning!==undefined&&learning!==null){
+    if(!learning||typeof learning!=='object'||Array.isArray(learning)||typeof learning.title!=='string'||learning.title.trim().length<3||learning.title.length>100||
+       (learning.note!==undefined&&(typeof learning.note!=='string'||learning.note.length>350))||
+       !Array.isArray(learning.steps)||learning.steps.length<1||learning.steps.length>12)fail('Panduan latihan alat tidak valid');
+    const stepIds=new Set();
+    for(const step of learning.steps){
+      if(!step||!cleanId(step.id)||stepIds.has(step.id)||typeof step.instruction!=='string'||step.instruction.trim().length<5||step.instruction.length>220||!step.condition||typeof step.condition!=='object')fail('Langkah latihan tidak valid');
+      stepIds.add(step.id);
+      const raw=step.condition;
+      if(raw.kind==='hold'&&(!Number.isInteger(raw.durationMs)||raw.durationMs<100||raw.durationMs>15000||!raw.predicate||typeof raw.predicate!=='object'))fail('Durasi atau kondisi tahan tidak valid');
+      const c=raw.kind==='hold'?raw.predicate:raw;
+      if(!['mechanism_range','action','status','parameter_range','attached','detached','distance','contact','orientation'].includes(c.kind))fail('Jenis kondisi latihan belum didukung','UNSUPPORTED_CAPABILITY');
+      if(['distance','contact','orientation'].includes(c.kind)){
+        if(!cleanId(c.targetId))fail('Target spasial tidak valid');
+        if(c.anchorId!==undefined&&!asset.anchors?.some(a=>a.id===c.anchorId))fail('Anchor instrumen untuk latihan tidak ditemukan');
+        if(c.targetAnchor!==undefined&&!cleanId(c.targetAnchor))fail('Anchor target tidak valid');
+        if(c.kind==='orientation'){
+          if(c.axisIndex!==undefined&&![0,1,2].includes(c.axisIndex))fail('Sumbu orientasi tidak valid');
+          if(!finite(c.maxAngle)||c.maxAngle<0||c.maxAngle>Math.PI)fail('Toleransi orientasi tidak valid');
+        }else if(c.maxDistance!==undefined&&(!finite(c.maxDistance)||c.maxDistance<=0||c.maxDistance>5))fail('Jarak latihan tidak valid');
+        else if(c.kind==='distance'&&c.maxDistance===undefined)fail('Latihan jarak memerlukan maxDistance');
+      }
+      if(c.kind==='mechanism_range'){
+        const m=mechanisms.find(m=>m.id===c.mechanismId);
+        if(!m||!finite(c.min)||!finite(c.max)||c.min>c.max||c.min<m.min||c.max>m.max)fail('Rentang latihan harus mengacu pada mekanisme yang valid');
+      }
+      if(c.kind==='parameter_range'){
+        if(!cleanId(c.key)||!finite(params[c.key])||!finite(c.min)||!finite(c.max)||c.min>c.max)fail('Rentang parameter latihan tidak valid');
+      }
+      if(c.kind==='status'&&(!asset.behaviorId||!cleanId(c.value)))fail('Status latihan memerlukan behavior');
+      if(c.kind==='action'&&(!asset.behaviorId||!cleanId(c.action)))fail('Aksi latihan memerlukan behavior');
+      if(c.kind==='attached'&&!cleanId(c.targetId))fail('Target latihan attachment tidak valid');
+    }
+  }
   if(asset.behaviorId!==undefined && asset.behaviorId!==null && !cleanId(asset.behaviorId)) fail('behaviorId tidak valid');
-  return {id:asset.id,name:asset.name.trim(),category:String(asset.category||'Buatan AI').slice(0,45),description:String(asset.description||'').slice(0,400),parts:copy(asset.parts),mechanisms:copy(mechanisms),anchors:copy(asset.anchors||[]),affordances:copy(affords),movable:asset.movable!==false,parameters:copy(params),behaviorId:asset.behaviorId||null,custom:true,version:Number.isInteger(asset.version)?asset.version:1};
+  return {id:asset.id,name:asset.name.trim(),category:String(asset.category||'Buatan AI').slice(0,45),description:String(asset.description||'').slice(0,400),parts:copy(asset.parts),mechanisms:copy(mechanisms),anchors:copy(asset.anchors||[]),affordances:copy(affords),movable:asset.movable!==false,parameters:copy(params),behaviorId:asset.behaviorId||null,...(learning?{learning:copy(learning)}:{}),custom:true,version:Number.isInteger(asset.version)?asset.version:1};
 }
 function validateBehavior(b){
   if(!b||!cleanId(b.id)||typeof b.name!=='string'||b.name.length>90||!Array.isArray(b.states)||b.states.length<1||b.states.length>24) fail('Behavior membutuhkan id, nama, dan 1–24 state');
@@ -147,6 +211,10 @@ function verifyAssetBehavior(asset,behaviors){
      if(effect.type==='adjust_parameter'&&typeof params[effect.key]!=='number')fail(`Parameter '${effect.key}' harus berupa angka`,'INCOMPATIBLE_BEHAVIOR');
    }
  }
+ for(const step of asset.learning?.steps||[]){
+   const c=step.condition;if(c.kind==='action'&&!behavior.transitions.some(t=>t.action===c.action))fail(`Aksi latihan '${c.action}' tidak tersedia`,'INCOMPATIBLE_BEHAVIOR');
+   if(c.kind==='status'&&!behavior.states.includes(c.value))fail(`Status latihan '${c.value}' tidak tersedia`,'INCOMPATIBLE_BEHAVIOR');
+ }
  for(const mechanism of asset.mechanisms||[])for(const action of Object.values(mechanism.triggers||{}))if(!behavior.transitions.some(t=>t.action===action))fail(`Aksi '${action}' pada mekanisme '${mechanism.id}' tidak ada di behavior`,'INCOMPATIBLE_BEHAVIOR');
 }
 function upgradeBuiltInAffordances(state) {
@@ -175,16 +243,17 @@ export class Studio {
     }
     Object.assign(this,{scene,assets,behaviors,log,undoStack,redoStack});
     this.listeners=new Set();
+    this.operationReceipts=new Map(current.operationReceipts||[]);
   }
   current(){return {scene:this.scene,assets:this.assets,behaviors:this.behaviors};}
   snapshot(){return copy({...this.current(),templates:TEMPLATES,poses:POSES});}
-  storedState(){return {...this.current(),undoStack:this.undoStack,redoStack:this.redoStack,log:this.log};}
+  storedState(){return {...this.current(),undoStack:this.undoStack,redoStack:this.redoStack,log:this.log,operationReceipts:[...this.operationReceipts]};}
   emit(event){for(const cb of this.listeners){try{cb(event)}catch{}}}
   persist(){}
   get hasPersistentStorage(){return false;}
   transaction(fn,label='update'){
-    const old=copy(this.current());const result=fn();this.scene.revision=old.scene.revision+1;try{this.persist()}catch(e){this.scene=old.scene;this.assets=old.assets;this.behaviors=old.behaviors;throw e;}
-    this.undoStack.push(old);this.undoStack=this.undoStack.slice(-35);this.redoStack=[];const entry={at:new Date().toISOString(),label,revision:this.scene.revision};this.log.unshift(entry);this.log=this.log.slice(0,80);this.emit(entry);return {ok:true,revision:this.scene.revision,result};
+    const old=this.snapshot();const result=fn();this.scene.revision=old.scene.revision+1;try{this.persist()}catch(e){this.scene=old.scene;this.assets=old.assets;this.behaviors=old.behaviors;throw e;}
+    this.undoStack.push(old);this.undoStack=this.undoStack.slice(-35);this.redoStack=[];const delta=diffWorld(old,this.snapshot());const entry={at:new Date().toISOString(),label,revision:this.scene.revision,delta};this.log.unshift({at:entry.at,label,revision:entry.revision});this.log=this.log.slice(0,80);this.emit(entry);return {ok:true,revision:this.scene.revision,result,delta};
   }
   validateAssetDraft(input){const asset=validateAsset(input);if(this.assets.some(a=>a.id===asset.id))fail('ID aset sudah dipakai','CONFLICT');verifyAssetBehavior(asset,this.behaviors);return {valid:true,asset,partCount:asset.parts.length};}
   validateBehaviorDraft(input){const behavior=validateBehavior(input);if(this.behaviors.some(b=>b.id===behavior.id))fail('ID behavior sudah dipakai','CONFLICT');return {valid:true,behavior,transitionCount:behavior.transitions.length};}
@@ -209,13 +278,22 @@ export class Studio {
    const assetIds=new Set(this.assets.filter(a=>a.behaviorId===id).map(a=>a.id));
    for(const e of this.scene.entities)if(e.type==='asset'&&assetIds.has(e.assetId)&&e.status&&!b.states.includes(e.status))fail(`Perilaku baru menghapus state aktif '${e.status}' pada ${e.id}`,'INCOMPATIBLE_UPDATE');
    return this.transaction(()=>{this.behaviors[i]=b;return b},'update_behavior');}
-  apply(operations,baseRevision){
+  apply(operations,baseRevision,operationId=null){
+    if(operationId!==null){
+      if(typeof operationId!=='string'||operationId.length>100||!/^[a-zA-Z0-9_.:-]{8,100}$/.test(operationId))fail('operationId tidak valid','INVALID_OPERATION_ID');
+      const old=this.operationReceipts.get(operationId);
+      if(old){if(old.payload!==JSON.stringify(operations))fail('operationId dipakai untuk perintah berbeda','IDEMPOTENCY_CONFLICT',409);return {...copy(old.response),deduplicated:true};}
+    }
     if(!Array.isArray(operations)||operations.length<1||operations.length>50)fail('Perintah membutuhkan 1–50 operasi');
     if(!Number.isInteger(baseRevision)||baseRevision!==this.scene.revision)throw new SceneError(`Revisi konflik: sekarang ${this.scene.revision}, permintaan ${baseRevision}`,'REVISION_CONFLICT',409);
     const saved=copy(this.scene);let result;
     try{result=this.transaction(()=>{
       const outputs=[];for(const op of operations)outputs.push(this.operation(op));return outputs;
     },`apply_${operations.length}_operations`)}catch(e){this.scene=saved;throw e;}
+    if(operationId){
+      this.operationReceipts.set(operationId,{payload:JSON.stringify(operations),response:copy(result)});
+      if(this.operationReceipts.size>128)this.operationReceipts.delete(this.operationReceipts.keys().next().value);
+    }
     return result;
   }
   preview(operations,baseRevision){
@@ -286,7 +364,7 @@ export class Studio {
        if(!finite(op.value)||op.value<m.min-1e-7||op.value>m.max+1e-7)fail('Nilai mekanisme di luar batas','OUT_OF_RANGE');
        if(!e.controls)e.controls=Object.fromEntries((def.mechanisms||[]).map(x=>[x.id,x.initial]));
        const prior=e.controls[m.id]??m.initial;
-       const value=Math.max(m.min,Math.min(m.max,op.value));e.controls[m.id]=value;
+       const value=Math.max(m.min,Math.min(m.max,op.value));e.controls[m.id]=value;applyCouplings(def,e,m.id);
        // A trigger only runs when crossing into an endpoint; never on a no-op.
        const edge=Math.abs(value-m.max)<1e-6&&Math.abs(prior-m.max)>=1e-6?'max':Math.abs(value-m.min)<1e-6&&Math.abs(prior-m.min)>=1e-6?'min':null;
        let event=null;if(edge&&m.triggers?.[edge]){

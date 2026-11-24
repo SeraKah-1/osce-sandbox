@@ -33,3 +33,13 @@
 
 .rotation-marker{position:absolute;left:0;top:0;width:48px;height:48px;border:2px solid #648bca;border-radius:50%;background:#f4f8ffdd;color:#4d78b6;display:grid;place-items:center;font:700 31px/1 system-ui;transform-origin:center;translate:-50% -50%;box-shadow:0 4px 12px #648bc233;pointer-events:none;user-select:none}
 .puppet-dragging .rotation-marker{opacity:.7}
+
+/* Micro equipment tutoring. Visible only for a selected articulated instrument. */
+.practice-micro{margin-top:14px;padding:13px;border-radius:16px;background:#eef5f1;border:1px solid #d6e7dd;display:flex;flex-direction:column;gap:9px}
+.practice-micro p{margin:0;color:#526d6a;font-size:12px;line-height:1.5}
+.practice-micro small{font-size:10px;color:#788f88;line-height:1.5}
+.micro-heading{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:#446b60;align-items:center}
+.micro-heading span{font-weight:750;font-variant-numeric:tabular-nums}
+.micro-bar{height:6px;border-radius:999px;background:#d3e5dc;overflow:hidden}
+.micro-bar>i{display:block;height:100%;background:#6bad98;transition:width .16s ease;width:0}
+.practice-micro button{align-self:flex-start}

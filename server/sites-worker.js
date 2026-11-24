@@ -93,9 +93,9 @@ function sessionEvents(sessions,id,signal,revision){
       await new Promise(resolve=>setTimeout(resolve,1600));
       if(!active)return;
       try{
-        const next=await sessions.revision(id);
+        const {revision:next,delta}=await sessions.event(id,revision);
         if(!active)return;
-        const message=next>revision?'event: scene_updated\ndata: '+JSON.stringify({revision:next})+'\n\n':': waiting\n\n';
+        const message=next>revision?'event: scene_updated\ndata: '+JSON.stringify({revision:next,delta})+'\n\n':': waiting\n\n';
         revision=next;
         controller.enqueue(encoder.encode(message));
       }catch(error){
@@ -112,7 +112,7 @@ function sessionEvents(sessions,id,signal,revision){
 async function studioApi(request,pathname,bucket,identity,context) {
   if (!identity) throw missingIdentity();
   const route=request.method+' '+pathname;
-  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'0.9.0'});
+  if (route==='GET /api/connection') return json({toolCount:toolsList.length,version:'1.1.0'});
   const sessions=new SiteSessions(bucket,identity);
   if (route==='POST /api/session') return json(await startSession(sessions,context),201);
   if (route==='POST /api/save') return json({error:'Sesi sementara: penyimpanan permanen dinonaktifkan.'},410);
@@ -142,7 +142,7 @@ async function studioApi(request,pathname,bucket,identity,context) {
   let result,status=200;
   switch (route) {
     case 'POST /api/preview': return json(studio.preview(payload.operations,payload.baseRevision));
-    case 'POST /api/operations': result=studio.apply(payload.operations,payload.baseRevision); break;
+    case 'POST /api/operations': result=studio.apply(payload.operations,payload.baseRevision,payload.operationId??null); break;
     case 'POST /api/assets': result=studio.createAsset(payload);status=201;break;
     case 'POST /api/behaviors': result=studio.createBehavior(payload);status=201;break;
     case 'POST /api/validate-asset': return json(studio.validateAssetDraft(payload));
@@ -172,7 +172,7 @@ export default {
     const pathname=url.pathname;
     const identity=request.headers.get('oai-authenticated-user-id');
     try {
-      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'0.9.0',persistentProjects:true},env.STUDIO?200:503);
+      if (pathname==='/health') return json({ok:!!env.STUDIO,server:'osce-sandbox-studio',version:'1.1.0',persistentProjects:true},env.STUDIO?200:503);
       if (pathname==='/mcp' || pathname.startsWith('/api/')) {
         const origin=request.headers.get('Origin');
         if (origin && origin!==url.origin) throw new SceneError('Origin tidak diizinkan.','FORBIDDEN',403);

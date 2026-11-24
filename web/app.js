@@ -1,6 +1,9 @@
 import {createRenderer} from './render3d.js';
+import {projectOperations} from './optimistic.js';
+import {advanceLearning,observeLearning,learningFeedback} from './learning.js';
+import {applyWorldDelta} from './scene-delta.js';
 
-// OSCE Playground v0.9. Tablet gestures remain transient; MCP-defined environment blueprints persist.
+// OSCE Playground v1.1. Tablet gestures remain transient; MCP-defined environment blueprints persist.
 // In an embedded app, mutations go through the host MCP bridge; no simulated AI responses.
 const $=id=>document.getElementById(id);
 const embedded=Boolean(window.__OSCE_EMBEDDED__);
@@ -17,6 +20,8 @@ let savedEnvironments=[],environmentFetchError='';
 let data=null,selected=null,selectedJoint=null,pane=null,category='all',selectionExpanded=false,detailMode=false;
 let queue=Promise.resolve(),inFlight=0,loading=false,dragActive=false,refreshLock=false,sessionId=null,remoteDirty=false,remoteRevision=0,eventAbort=null,sessionClosed=false;
 let lastError='',renderer,toastTimer,hostReady=false,hostKind='local',frameReady=false;
+let serverRevision=0,unconfirmed=0,reconcileNeeded=false;
+const lessonProgress=new Map(),lessonHold=new Map();
 const bridgePending=new Map();let bridgeCounter=0,bridgeOrigin='*',initialWidgetState=null,receiveInitial;
 
 function status(phase,label){$('syncStatus').textContent=label;$('statusLed').className='status-led '+(phase==='ok'?'ok':phase==='pending'?'pending':phase==='error'?'error':'');$('syncButton').dataset.state=phase;}
@@ -38,7 +43,7 @@ window.addEventListener('message',event=>{
    if(!updated?.sessionId || !updated.scene)return;
    if(!sessionId){initialWidgetState=updated;receiveInitial?.(updated);return;}
    if(updated.sessionId!==sessionId || updated.scene.revision<=data.scene.revision)return;
-   if(!dragActive&&!inFlight)applyData(updated);
+   if(!dragActive&&!inFlight&&!unconfirmed)applyData(updated);
    else{remoteDirty=true;remoteRevision=Math.max(remoteRevision,updated.scene.revision);}
    return;
  }
@@ -53,7 +58,7 @@ window.addEventListener('message',event=>{
 async function initializeBridge(){
  if(!embedded||hostReady||previewHost)return;
  if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}
- try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'0.9.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
+ try{await hostRpc('ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'osce-playground',version:'1.1.0'}},5000);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},bridgeOrigin);hostReady=true;hostKind='mcp-app';}
  catch(err){if(window.openai?.callTool){hostReady=true;hostKind='chatgpt';return;}if(previewHost){hostKind='local-preview';hostReady=false;return;}throw Error('Koneksi host ChatGPT belum tersedia: '+err.message);}
 }
 async function tool(name,args={}){
@@ -78,8 +83,8 @@ async function tool(name,args={}){
   default:throw Error('Tool tidak didukung: '+name);
  }
 }
-function applyData(next){if(!renderer)throw Error('Renderer tidak tersedia');if(!next?.scene?.entities||!Array.isArray(next.assets))throw Error('Format scene dari server tidak lengkap');if(next.sessionId)sessionId=next.sessionId;data=next;renderer.setWorld(data);
- if(selected&&!data.scene.entities.some(e=>e.id===selected)){selected=null;selectedJoint=null;}
+function applyData(next){if(!renderer)throw Error('Renderer tidak tersedia');if(!next?.scene?.entities||!Array.isArray(next.assets))throw Error('Format scene dari server tidak lengkap');if(next.sessionId)sessionId=next.sessionId;data=next;serverRevision=next.scene.revision;renderer.setWorld(data);
+ if(selected&&!data.scene.entities.some(e=>e.id===selected)){selected=null;selectedJoint=null;selectionExpanded=false;detailMode=false;renderer.setDetailMode(false);$('detailHud').hidden=true;}
  renderer.setSelected(selected,selectedJoint);$('sceneTitle').textContent=data.scene.title;renderSelection();if(pane)renderPane();status('ok',data.environmentId?'Blueprint GPT tersimpan':'Sesi sementara');}
 function setRendererStatus(kind,message){const indicator=$('rendererPill');if(kind==='ready'){frameReady=true;indicator.hidden=true;if(data)hideLoading();}
  else if(kind==='recovering'){indicator.hidden=false;indicator.textContent='Memulihkan 3D…';}
@@ -93,6 +98,36 @@ function stopPane(){pane=null;$('sheet').hidden=true;document.querySelectorAll('
 function openPane(name){if(pane===name){stopPane();return;}pane=name;$('sheet').hidden=false;$('selectionCard').hidden=true;document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('active',x.dataset.panel===name));renderPane();if(name==='environments')refreshEnvironments().catch(e=>{environmentFetchError=e.message;renderPane();});}
 async function refreshEnvironments(){environmentFetchError='';const r=embedded?await tool('list_environments'):await api('/api/environments');savedEnvironments=r.environments||[];if(pane==='environments')renderPane();}
 function friendlyJoint(name){return name.replace(/^(right|left)/,(_,s)=>s==='right'?'Kanan · ':'Kiri · ').replace('Shoulder','Bahu').replace('Elbow','Siku').replace('Wrist','Pergelangan tangan').replace('Hip','Pinggul').replace('Knee','Lutut').replace('Ankle','Pergelangan kaki').replace('neck','Leher').replace('spine','Punggung');}
+function trainingMarkup(asset,entity){
+ const guide=asset?.learning;if(!guide?.steps?.length)return '';
+ const index=lessonProgress.get(entity.id)||0,step=guide.steps[index],done=index>=guide.steps.length;
+ return `<div class="practice-micro" aria-live="polite"><div class="micro-heading"><strong>${esc(guide.title)}</strong><span>${index}/${guide.steps.length}</span></div><p>${done?'Semua tindakan mekanis latihan ini berhasil dilakukan.':esc(step.instruction)}</p><div class="micro-bar"><i style="width:${Math.round(index/guide.steps.length*100)}%"></i></div><small>${esc(guide.note||'Hasil berasal dari perubahan alat, bukan penilaian klinis otomatis.')}</small>${done?'<button class="soft-button" data-operation="retry-lesson">Ulangi latihan alat</button>':''}</div>`;
+}
+function updateLearning(operations){
+ for(const op of operations){const entity=data?.scene.entities.find(e=>e.id===op.entityId);if(!entity||entity.type!=='asset')continue;
+  const asset=blueprint(entity);if(!asset?.learning?.steps?.length)continue;
+  const before=lessonProgress.get(entity.id)||0,after=advanceLearning(asset,entity,[op],before,data);
+  if(after>before){lessonProgress.set(entity.id,after);const msg=after===asset.learning.steps.length?'Latihan mekanisme selesai':'Langkah alat berhasil · '+after+'/'+asset.learning.steps.length;notice(msg);}
+ }
+ if(detailMode&&selected)updateDetailHUD();
+}
+function updateDetailHUD(){
+ const e=currentEntity(),a=blueprint(e);if(!detailMode||!e||!a)return;
+ const steps=a.learning?.steps,index=lessonProgress.get(e.id)||0;
+ const current=(a.mechanisms||[]).map(m=>`${m.label}: ${fmt(e.controls?.[m.id]??m.initial)}${['hinge','dial'].includes(m.kind)?'°':''}`).join(' · ');
+ $('detailValue').textContent=steps?.length?`${index>=steps.length?'Latihan selesai':steps[index].instruction} · ${learningFeedback(steps[index],e,data,lessonHold.get(e.id),performance.now())} · ${current}`:current||'Tarik titik biru pada bagian alat';
+}
+function pollHoldPractice(){
+ if(!detailMode||!selected||!data||document.hidden)return;
+ const e=currentEntity(),a=blueprint(e);if(!e||!a?.learning?.steps?.length)return;
+ const index=lessonProgress.get(e.id)||0;
+ const hold=lessonHold.get(e.id)||{since:null};
+ const next=observeLearning(a,e,index,data,hold,performance.now());
+ lessonHold.set(e.id,hold);
+ if(a.learning.steps[index]?.condition?.kind==='hold')updateDetailHUD();
+ if(next!==index){lessonProgress.set(e.id,next);renderSelection();updateDetailHUD();notice(next===a.learning.steps.length?'Latihan selesai':'Langkah alat berhasil · '+next+'/'+a.learning.steps.length);}
+}
+setInterval(pollHoldPractice,120);
 function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||pane){el.hidden=true;return;}el.hidden=false;el.classList.toggle('compact',!selectionExpanded);$('selectionExpand').setAttribute('aria-expanded',String(selectionExpanded));$('selectionName').textContent=e.name;$('selectionKicker').textContent=e.type==='character'?'BONEKA · '+(e.role==='doctor'?'DOKTER':'PASIEN'):'OBJEK · '+(e.status||'BEBAS');
  if(e.type==='character'){
   const joint=selectedJoint&&e.pose[selectedJoint]?selectedJoint:null;
@@ -100,7 +135,7 @@ function renderSelection(){const el=$('selectionCard'),e=currentEntity();if(!e||
   $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${esc(e.supportedBy?(e.supportedBy.kind==='bed'?'Berbaring':'Duduk')+' · '+label:label)} · seret boneka langsung di layar</span></div><div class="row-actions"><button class="soft-button" data-operation="rotate-left" title="Putar boneka 30 derajat ke kiri">↶ Putar</button><button class="soft-button" data-operation="rotate-right" title="Putar boneka 30 derajat ke kanan">↷ Putar</button></div><div class="row-actions"><button class="soft-button" data-operation="pose-standing">Berdiri</button><button class="soft-button" data-operation="pose-sitting">Duduk</button></div><p class="hint">Tarik tubuh untuk memindahkan, tarik tangan/kaki untuk berpose. Tarik ikon putar ⟳ di dekat boneka untuk merotasi tubuh.</p>`;
  }else{
   const a=blueprint(e),b=behavior(e),actions=(b?.transitions||[]).filter(t=>t.from===(e.status??b?.initial));
-  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${a?.movable===false?'Objek tidak bisa dipindahkan':'Seret untuk memindahkan · tarik ikon ⟳ untuk memutar'}</span></div>${Object.keys(e.parameters||{}).length?`<p class="hint">${Object.entries(e.parameters).map(([k,v])=>esc(k)+': '+esc(String(v))).join(' · ')}</p>`:''}${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}${a?.movable===false?'':`<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div>`}${(a?.mechanisms||[]).length?`<div class="section-divider"></div><button class="primary-button" data-operation="detail-mode">${detailMode?'Selesai Detail':'🔍 Edit Detail · '+a.mechanisms.length+' bagian'}</button>${detailMode?a.mechanisms.map(m=>`<div class="mechanism-row"><span><strong>${esc(m.label)}</strong><small>${esc(m.kind)} · ${fmt(e.controls?.[m.id]??m.initial)} ${['hinge','dial'].includes(m.kind)?'°':'m'}</small></span><button class="soft-button" data-control-step="${esc(m.id)}" data-dir="-1" aria-label="Kurangi ${esc(m.label)}">−</button><button class="soft-button" data-control-step="${esc(m.id)}" data-dir="1" aria-label="Tambah ${esc(m.label)}">+</button></div>`).join(''):''}`:''}${(a?.affordances||[]).length?'':`<div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button></div>`}<div class="row-actions">${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
+  $('selectionBody').innerHTML=`<div class="pose-caption"><span class="pose-dot"></span><span>${a?.movable===false?'Objek tidak bisa dipindahkan':'Seret untuk memindahkan · tarik ikon ⟳ untuk memutar'}</span></div>${Object.keys(e.parameters||{}).length?`<p class="hint">${Object.entries(e.parameters).map(([k,v])=>esc(k)+': '+esc(String(v))).join(' · ')}</p>`:''}${actions.length?`<div class="row-actions">${actions.map(x=>`<button type="button" class="primary-button" data-action="${esc(x.action)}">${esc(x.label)}</button>`).join('')}</div>`:''}${a?.movable===false?'':`<div class="row-actions"><button class="soft-button" data-operation="rotate-left">↶ Putar</button><button class="soft-button" data-operation="rotate-right">↷ Putar</button></div>`}${(a?.mechanisms||[]).length?`<div class="section-divider"></div><button class="primary-button" data-operation="detail-mode">${detailMode?'Selesai Detail':'🔍 Gunakan alat · '+a.mechanisms.length+' bagian'}</button>${detailMode?a.mechanisms.map(m=>`<div class="mechanism-row"><span><strong>${esc(m.label)}</strong><small>${esc(m.kind)} · ${fmt(e.controls?.[m.id]??m.initial)} ${['hinge','dial'].includes(m.kind)?'°':'m'}</small></span><button class="soft-button" data-control-step="${esc(m.id)}" data-dir="-1" aria-label="Kurangi ${esc(m.label)}">−</button><button class="soft-button" data-control-step="${esc(m.id)}" data-dir="1" aria-label="Tambah ${esc(m.label)}">+</button></div>`).join('')+trainingMarkup(a,e):''}`:''}${(a?.affordances||[]).length?'':`<div class="row-actions"><button class="soft-button" data-operation="attach-doctor">Pegang dokter</button><button class="soft-button" data-operation="attach-patient">Pegang pasien</button></div>`}<div class="row-actions">${e.attachedTo?'<button class="soft-button" data-operation="detach">Lepas</button>':''}</div><div class="row-actions"><button type="button" class="soft-button" data-operation="duplicate">Duplikasi</button><button type="button" class="danger-button" data-operation="delete">Hapus</button></div>`;
  }
 }
 const navTitles={environments:['SAVED WORLDS','Environment dari GPT'],add:['ADD TO WORLD','Tambah objek'],ask:['AI BUILDER','Ask ChatGPT'],practice:['PRACTICE','Latihan OSCE'],more:['WORKSPACE','Pengaturan'],objects:['SCENE TREE','Semua objek'],advanced:['ADVANCED','Asset & Behavior'],diagnostics:['CONNECTION','Status & diagnostik']};
@@ -138,38 +173,88 @@ function renderPane(){if(!pane)return;
 }
 // The renderer and IK mutate the in-memory world immediately. Only a *finished*
 // gesture produces an intent operation for the MCP session world. No per-frame
-// requests. The editor explicitly keeps its changes in the active session.
-async function updateScene(operations,{gesture=false,expectedSession}={}){
+// requests or per-frame storage. Only named environment edits performed via MCP autosave.
+// Operations from the tablet are visible immediately. The backend validates them
+// serially; only MCP-authored environment blueprints are written to persistent storage.
+async function updateScene(operations,{gesture=false,operationId=null,expectedSession}={}){
  if(expectedSession!==sessionId)return;
  if(!data)throw Error('Sesi belum dimulai');
  inFlight++;
- const baseRevision=data.scene.revision;
+ const baseRevision=serverRevision;
  try{
-  const result=await tool('apply_scene_operations',{operations,baseRevision});
+  const result=await tool('apply_scene_operations',{operations,baseRevision,operationId});
   if(expectedSession!==sessionId)return result;
-  data.scene.revision=result.revision;
-  const hasTriggeredMechanism=operations.some(op=>op.type==='set_mechanism'&&data.assets.find(a=>a.id===data.scene.entities.find(e=>e.id===op.entityId)?.assetId)?.mechanisms?.some(m=>m.id===op.mechanismId&&Object.keys(m.triggers||{}).length));
-  if(!gesture||hasTriggeredMechanism||operations.some(op=>op.type==='rotate_entity')){await reload({force:true,quiet:true});}
-  if(gesture)status('ok',data.environmentId?'Gerak sementara · GPT tersimpan':'Sesi sementara');
+  if(result.sessionNeedsReload){reconcileNeeded=true;throw Error('Perubahan tersimpan. Buka kembali environment untuk menampilkan hasil.');}
+  if(result.deduplicated&&result.revision<serverRevision){reconcileNeeded=true;return result;}
+  serverRevision=result.revision;
+  // Apply the verified changes per entity instead of re-fetching the whole world.
+  // If more gestures are queued, their unverified local previews must not be overwritten.
+  if(result.delta && unconfirmed===1 && !dragActive){
+   try{data.scene.revision=result.revision-1;applyWorldDelta(data,result.delta);renderer.setWorld(data);$('sceneTitle').textContent=data.scene.title;renderSelection();if(pane)renderPane();}
+   catch{reconcileNeeded=true;data.scene.revision=result.revision;}
+  }else{data.scene.revision=result.revision;if(unconfirmed>1)reconcileNeeded=true;}
+
+  if(operations.some(op=>op.type==='set_mechanism'&&data.assets.find(a=>a.id===data.scene.entities.find(e=>e.id===op.entityId)?.assetId)?.mechanisms?.some(m=>m.id===op.mechanismId&&Object.keys(m.triggers||{}).length)))reconcileNeeded=true;
   clearError();return result;
  }catch(err){
   if(expectedSession!==sessionId)return;
-  showError('Perubahan tidak diterima server',err.message+' · Perubahan di perangkat ditampilkan dahulu, lalu akan dipulihkan dari sesi server.');
-  await reload({force:true,quiet:true}).catch(()=>{});
+  reconcileNeeded=true;
+  for(const op of operations)if(op.entityId){lessonProgress.delete(op.entityId);lessonHold.delete(op.entityId);}
+  showError('Perubahan tidak dikonfirmasi',err.message+' · Studio akan mencocokkan keadaan setelah antrean selesai.');
   throw err;
- }finally{inFlight--;if(expectedSession===sessionId&&remoteDirty&&!dragActive&&inFlight===0){remoteDirty=false;const needed=remoteRevision>(data?.scene?.revision||0);remoteRevision=0;if(needed)reload({force:true,quiet:true}).catch(()=>{});}}
+ }finally{
+  inFlight--;
+ }
 }
-function mutate(operations,options={}){const expectedSession=sessionId;const task=queue.then(()=>updateScene(operations,{...options,expectedSession}));queue=task.catch(()=>{});return task;}
+function mutate(operations,options={}){
+ if(!data)return Promise.reject(Error('Sesi belum dimulai'));
+ const isGesture=options.gesture===true;
+ options={...options,expectedSession:sessionId,operationId:options.operationId||(globalThis.crypto?.randomUUID?.()||safeID('op'))};
+ if(!isGesture){
+  // A malformed local projection must not crash the UI. The authoritative
+  // operation still runs and is reconciled from the server if unsupported.
+  try{
+   const preview=structuredClone(data);
+   if(projectOperations(preview,operations)){
+    data=preview;renderer.setWorld(data);renderer.setSelected(selected,selectedJoint);
+    updateLearning(operations);renderSelection();if(pane)renderPane();
+   }else reconcileNeeded=true;
+  }catch(error){reconcileNeeded=true;console.warn('Optimistic preview unavailable:',error.message);}
+ }else updateLearning(operations);
+ unconfirmed++;
+ status('pending','Langsung di tablet · memeriksa');
+ const task=queue.then(()=>updateScene(operations,options));
+ queue=task.catch(()=>{});
+ // Do not gate the next touch/frame on a network request. The queue also keeps
+ // revisions ordered if a learner adds multiple props rapidly.
+ task.then(()=>{},()=>{}).finally(()=>{
+  unconfirmed=Math.max(0,unconfirmed-1);
+  if(!unconfirmed){
+   if(remoteRevision<=serverRevision)remoteDirty=false;
+   if(reconcileNeeded||remoteDirty){
+    reconcileNeeded=false;remoteDirty=false;remoteRevision=0;
+    reload({force:true,quiet:true}).catch(error=>{
+     reconcileNeeded=true;
+     status('error','Belum cocok dengan server');
+     showError('Scene perlu dipulihkan',error.message+' · Coba Periksa koneksi untuk memuat keadaan yang dikonfirmasi.');
+    });
+   }else status('ok',data?.environmentId?'Responsif · Blueprint GPT':'Responsif · sesi sementara');
+  }
+ });
+ return task;
+}
 async function reload({quiet=false,force=false}={}){
- if(refreshLock)return;
- if((inFlight>0||dragActive)&&!force){remoteDirty=true;return;}
+ if(refreshLock){remoteDirty=true;return;}
+ if((inFlight>0||dragActive||unconfirmed>0)&&!force){remoteDirty=true;return;}
  refreshLock=true;
  const expectedSession=sessionId;
  try{const latest=await tool('get_world_state');if(expectedSession!==sessionId)return;if(!dragActive){applyData(latest);if(frameReady)hideLoading();}else remoteDirty=true;if(!quiet)clearError();}
  catch(err){if(!quiet){showError('Sesi belum tersedia',err.message);if(!data)loadingFailure(err.message);}throw err;}
  finally{refreshLock=false;}
 }
-async function performTool(name,args={},success){inFlight++;try{
+async function performTool(name,args={},success){
+ // Undo, reset and catalog writes must not overtake pending optimistic changes.
+ await queue;inFlight++;try{
  const result=await tool(name,args);
  if(!['get_execution_log','validate_asset','validate_behavior','test_behavior'].includes(name))await reload({force:true,quiet:true});
  if(success)notice(success);status('ok',data?.environmentId?'Blueprint GPT tersimpan':'Sesi sementara');return result;
@@ -196,8 +281,11 @@ function listenSessionEvents(){
       const line=block.split('\n').find(x=>x.startsWith('data: '));if(!line)continue;
       let evt;try{evt=JSON.parse(line.slice(6))}catch{continue}
       if(evt.revision>(data?.scene?.revision||0)){
-       if(dragActive||inFlight>0){remoteDirty=true;remoteRevision=Math.max(remoteRevision,evt.revision);}
-       else await reload({quiet:true});
+       if(dragActive||inFlight>0||unconfirmed>0){remoteDirty=true;remoteRevision=Math.max(remoteRevision,evt.revision);}
+       else if(evt.delta){
+        try{applyWorldDelta(data,evt.delta);serverRevision=data.scene.revision;renderer.setWorld(data);$('sceneTitle').textContent=data.scene.title;renderSelection();if(pane)renderPane();}
+        catch{await reload({quiet:true});}
+       }else await reload({quiet:true});
       }
      }
     }
@@ -213,7 +301,7 @@ function listenSessionEvents(){
 }
 async function startFreshSession({useHostResult=false}={}){
  eventAbort?.abort();eventAbort=null;
- sessionId=null;remoteDirty=false;remoteRevision=0;
+ sessionId=null;remoteDirty=false;remoteRevision=0;lessonProgress.clear();lessonHold.clear();
  if(embedded&&!previewHost){
    await initializeBridge();
    let initial=useHostResult ? window.openai?.toolOutput || initialWidgetState : null;
@@ -233,19 +321,20 @@ function safeID(prefix){return prefix+'-'+(globalThis.crypto?.randomUUID?.().sli
 function spawnPosition(furniture){const offset=(data?.scene.entities.length||0)%6;return furniture?[0.7+offset*.22,0,-.7+offset*.21]:[0.35+offset*.19,.82,.4+offset*.14];}
 async function execute(kind,payload){const e=currentEntity();try{
  switch(kind){
-  case 'spawn-character':{const role=payload;const id=safeID('human');await mutate([{type:'spawn_character',id,role,name:role==='doctor'?'Dokter baru':'Pasien baru',position:role==='doctor'?[-1.7,0,1.3]:[1.1,0,1.3]}]);choose(id);stopPane();notice('Boneka ditambahkan');break;}
-  case 'spawn-asset':{const a=data.assets.find(x=>x.id===payload);if(!a)throw Error('Aset tidak ada dalam katalog');const id=safeID('object');await mutate([{type:'spawn_asset',id,assetId:a.id,position:spawnPosition(a.category==='Furnitur')}]);choose(id);stopPane();notice(a.name+' ditambahkan');break;}
+  case 'spawn-character':{const role=payload;const id=safeID('human');const pending=mutate([{type:'spawn_character',id,role,name:role==='doctor'?'Dokter baru':'Pasien baru',position:role==='doctor'?[-1.7,0,1.3]:[1.1,0,1.3]}]);choose(id);stopPane();notice('Boneka langsung muncul · menunggu validasi');pending.catch(()=>{});break;}
+  case 'spawn-asset':{const a=data.assets.find(x=>x.id===payload);if(!a)throw Error('Aset tidak ada dalam katalog');const id=safeID('object');const pending=mutate([{type:'spawn_asset',id,assetId:a.id,position:spawnPosition(a.category==='Furnitur')}]);choose(id);stopPane();notice(a.name+' langsung muncul · menunggu validasi');pending.catch(()=>{});break;}
   case 'pose-standing':case 'pose-sitting':if(e)await mutate([{type:'apply_pose',entityId:e.id,presetId:kind.replace('pose-','')}]);break;
-  case 'detail-mode':{if(e?.type==='asset'&&blueprint(e)?.mechanisms?.length){detailMode=!detailMode;renderer.setDetailMode(detailMode);$('detailHud').hidden=!detailMode;if(detailMode)renderer.focusDetail(e.id);renderSelection();}break;}
+  case 'detail-mode':{if(e?.type==='asset'&&blueprint(e)?.mechanisms?.length){detailMode=!detailMode;selectionExpanded=detailMode;renderer.setDetailMode(detailMode);$('detailHud').hidden=!detailMode;if(detailMode)renderer.focusDetail(e.id);renderSelection();updateDetailHUD();}break;}
+  case 'retry-lesson':if(e){lessonProgress.set(e.id,0);lessonHold.delete(e.id);renderSelection();updateDetailHUD();notice('Latihan alat diulang');}break;
   case 'rotate-left':case 'rotate-right':if(e){const step=kind==='rotate-left'?-Math.PI/6:Math.PI/6;await mutate([{type:'rotate_entity',entityId:e.id,rotation:[e.rotation?.[0]||0,Math.atan2(Math.sin((e.rotation?.[1]||0)+step),Math.cos((e.rotation?.[1]||0)+step)),e.rotation?.[2]||0]}]);}break;
   case 'attach-doctor':case 'attach-patient':if(e)await mutate([{type:'attach',entityId:e.id,targetId:kind.replace('attach-',''),anchor:'rightHand'}]);break;
   case 'detach':if(e)await mutate([{type:'detach',entityId:e.id}]);break;
   case 'duplicate':if(e?.type==='asset'){const id=safeID('copy');await mutate([{type:'spawn_asset',id,assetId:e.assetId,position:[e.position[0]+.25,e.position[1],e.position[2]+.25],rotation:e.rotation}]);choose(id);}break;
   case 'delete':if(e&&confirm('Hapus '+e.name+' dari scene?')){await mutate([{type:'delete_entity',entityId:e.id}]);choose(null);}break;
-    case 'undo':await performTool('undo_scene',{},'Undo selesai');break;
-  case 'redo':await performTool('redo_scene',{},'Redo selesai');break;
+    case 'undo':await performTool('undo_scene',{},'Undo selesai');lessonProgress.clear();lessonHold.clear();renderSelection();updateDetailHUD();break;
+  case 'redo':await performTool('redo_scene',{},'Redo selesai');lessonProgress.clear();lessonHold.clear();renderSelection();updateDetailHUD();break;
   case 'reset-camera':renderer.resetCamera();notice('Kamera kembali ke posisi awal');break;
-      case 'reset-world':if(confirm('Mulai sesi kosong dari awal? Semua perubahan sesi ini akan hilang.')){eventAbort?.abort();eventAbort=null;if(embedded){sessionId=null;await startFreshSession();}else{if(sessionId)await fetch('/api/session',{method:'DELETE',headers:apiHeaders()}).catch(()=>{});sessionId=null;await startFreshSession();}choose(null);stopPane();notice('Sesi baru dimulai');}break;
+      case 'reset-world':if(confirm('Mulai sesi kosong dari awal? Semua perubahan sesi ini akan hilang.')){await queue;eventAbort?.abort();eventAbort=null;if(embedded){sessionId=null;lessonProgress.clear();await startFreshSession();}else{if(sessionId)await fetch('/api/session',{method:'DELETE',headers:apiHeaders()}).catch(()=>{});sessionId=null;lessonProgress.clear();await startFreshSession();}choose(null);stopPane();notice('Sesi baru dimulai');}break;
   case 'check-mcp':{
     const summary=$('diagSummary');
     if(embedded&&!previewHost){
@@ -260,7 +349,7 @@ async function execute(kind,payload){const e=currentEntity();try{
   }
   case 'refresh-environments':await refreshEnvironments();notice('Daftar environment diperbarui');break;
   case 'sync-now':await startFreshSession();notice('Sesi baru dimulai');break;
-  case 'set-token':session.setItem('osce-studio-token',$('serverToken').value.trim());eventAbort?.abort();eventAbort=null;sessionId=null;await startFreshSession();if(data)stopPane();notice('Sesi baru terhubung');break;
+  case 'set-token':await queue;session.setItem('osce-studio-token',$('serverToken').value.trim());eventAbort?.abort();eventAbort=null;sessionId=null;await startFreshSession();if(data)stopPane();notice('Sesi baru terhubung');break;
   case 'load-log':{const logs=await tool('get_execution_log');const array=Array.isArray(logs)?logs:logs.result||[];const holder=$('recentLog');if(holder)holder.innerHTML=array.slice(0,12).map(l=>`<div class="status-desc">${esc(l.label)} · r${esc(l.revision)}<br><span class="meta">${esc(l.at)}</span></div>`).join('')||'<p>Belum ada riwayat.</p>';break;}
   case 'validate-asset':case 'create-asset':{const raw=$('assetJSON').value;window.__assetDraft=raw;const a=JSON.parse(raw);const r=await performTool(kind==='create-asset'?'create_asset':'validate_asset',kind==='create-asset'?a:{asset:a});notice(kind==='create-asset'?'Aset baru siap dipakai di sesi ini':'Aset valid: '+r.partCount+' bagian');break;}
   case 'validate-behavior':case 'create-behavior':{const raw=$('behaviorJSON').value;window.__behaviorDraft=raw;const b=JSON.parse(raw);const r=await performTool(kind==='create-behavior'?'create_behavior':'validate_behavior',kind==='create-behavior'?b:{behavior:b});notice(kind==='create-behavior'?'Perilaku siap di sesi ini':'Perilaku valid: '+r.transitionCount+' transisi');break;}
@@ -293,7 +382,7 @@ try{renderer=createRenderer($('scene3d'),$('hotspots'),{
  onGesture(phase,hit){if(phase==='start'){if(hit){selectionExpanded=false;renderSelection();}dragActive=!!hit;document.body.classList.toggle('puppet-dragging',!!hit);const attached=hit&&data?.scene?.entities.find(e=>e.id===hit.entityId)?.attachedTo;$('interactionHint').textContent=attached?'Objek terpasang · buka tindakan objek untuk melepas':hit?.kind==='pose'?'Tarik tangan/kaki · Lepas untuk membekukan':hit?'Geser objek · Lepas untuk menyimpan':'Geser ruang kosong untuk memutar kamera';}
   if(phase==='rotate'){$('interactionHint').textContent='Memutar objek · lepas untuk menetapkan arah';dragActive=true;}
   if(phase==='camera'){$('interactionHint').textContent='Pose tetap · dua jari untuk zoom dan geser kamera';dragActive=true;}
-  if(phase==='end'||phase==='cancel'){dragActive=false;setTimeout(()=>{if(remoteDirty&&!dragActive&&!inFlight&&remoteRevision>(data?.scene?.revision||0)){remoteDirty=false;remoteRevision=0;reload({quiet:true}).catch(()=>{});}},80);document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
+  if(phase==='end'||phase==='cancel'){dragActive=false;setTimeout(()=>{if(remoteDirty&&!dragActive&&!inFlight&&!unconfirmed&&remoteRevision>(data?.scene?.revision||0)){remoteDirty=false;remoteRevision=0;reload({quiet:true}).catch(()=>{});}},80);document.body.classList.remove('puppet-dragging');$('interactionHint').textContent='Tarik tubuh, tangan, atau kaki · Cubit untuk zoom';if(selected)renderSelection();}},
  onCommitOperations(operations){
   const pose=operations.find(o=>o.type==='place_character');
   const asset=operations.find(o=>o.type==='place_asset');
@@ -318,7 +407,7 @@ $('retryLoad').addEventListener('click',()=>{showLoading('Mencoba membuat sesi b
 $('sheetBody').addEventListener('click',async event=>{
  const b=event.target.closest('button');if(!b)return;
  if(b.dataset.open){openPane(b.dataset.open);return;}
- if(b.dataset.loadEnvironment){try{const id=b.dataset.loadEnvironment;const loaded=embedded?await tool('load_environment',{environmentId:id}):await api('/api/environments/'+encodeURIComponent(id)+'/open','POST',{});applyData(loaded);choose(null);stopPane();notice('Environment dimuat. Gerakan manual tetap sementara.');}catch(e){showError('Gagal membuka environment',e.message);}return;}
+ if(b.dataset.loadEnvironment){try{await queue;const id=b.dataset.loadEnvironment;const loaded=embedded?await tool('load_environment',{environmentId:id}):await api('/api/environments/'+encodeURIComponent(id)+'/open','POST',{});lessonProgress.clear();lessonHold.clear();applyData(loaded);choose(null);stopPane();notice('Environment dimuat. Gerakan manual tetap sementara.');}catch(e){showError('Gagal membuka environment',e.message);}return;}
  if(b.dataset.cat){category=b.dataset.cat;renderPane();return;}
  if(b.dataset.spawn)await execute('spawn-asset',b.dataset.spawn);
  if(b.dataset.spawnCharacter)await execute('spawn-character',b.dataset.spawnCharacter);

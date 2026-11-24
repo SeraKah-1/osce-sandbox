@@ -11,8 +11,16 @@ export function renderWidget(assets){
  const touchSource=unexport(assets['touch-pose.js']).replace(/^import .*?;\s*/gm,'');
  const touch=`const {installDirectTouch,rotationHandle}=(()=>{const {solveTwoBone3D,limbSpec,choosePole,screenRay,projectedDragTarget,intersectRayPlane,add3,sub3}=__ik3d;const {placementCandidate,characterPlacementCandidate,affordancesFor,reflowSupported}=__placement;const {mechanismHandle,mechanismNextValue}=__assembly;\n${touchSource}\nreturn {installDirectTouch,rotationHandle};})();`;
  const graphics='const {partMatrix,assemblyRoot,mechanismHandle,transformPoint}=__assembly;\n'+unexport(assets['render3d.js']).replace(/^import .*?;\s*/gm,'');
- const ui=assets['app.js'].replace(/^import \{createRenderer\} from '\.\/render3d\.js';\s*/,'');
- const js=("window.__OSCE_EMBEDDED__=true;\n"+assembly+'\n'+ik+'\n'+placement+'\n'+touch+'\n'+graphics+'\n'+ui).replace(/<\/script/gi,'<\\/script');
+ const coupling=`const {applyCouplings}=(()=>{${unexport(assets['coupling.js'])}\nreturn {applyCouplings};})();`;
+ const optimistic=`const {projectOperations}=(()=>{const {reflowSupported,affordancesFor,characterPlacement,surfacePosition}=__placement;${unexport(assets['optimistic.js']).replace(/^import .*?;\s*/gm,'').replace(/^export \{.*?\};\s*/gm,'')}\nreturn {projectOperations};})();`;
+ const spatial=`const __spatial=(()=>{const {assemblyRoot,partMatrix,transformPoint}=__assembly;${unexport(assets['spatial.js']).replace(/^import .*?;\s*/gm,'')}
+return {spatialPredicate,isSpatialCondition,anchorPosition};})();`;
+ const delta=`const {applyWorldDelta}=(()=>{${unexport(assets['scene-delta.js'])}
+return {applyWorldDelta};})();`;
+ const learning=`const {advanceLearning,observeLearning,learningFeedback}=(()=>{const {spatialPredicate,isSpatialCondition,anchorPosition}=__spatial;${unexport(assets['learning.js']).replace(/^import .*?;\s*/gm,'').replace(/^export \{.*?\};\s*/gm,'')}
+return {advanceLearning,observeLearning,learningFeedback};})();`;
+ const ui=assets['app.js'].replace(/^import .*?;\s*/gm,'');
+ const js=("window.__OSCE_EMBEDDED__=true;\n"+assembly+'\n'+ik+'\n'+placement+'\n'+touch+'\n'+graphics+'\n'+coupling+'\n'+optimistic+'\n'+spatial+'\n'+delta+'\n'+learning+'\n'+ui).replace(/<\/script/gi,'<\\/script');
  return index.replace(/<link rel="stylesheet" href="\/styles\.css">/,()=>'<style>'+css+'</style>')
   .replace(/<link rel="manifest" href="\/manifest\.webmanifest">/,'')
   .replace(/<link rel="icon"[^>]*>/,'')

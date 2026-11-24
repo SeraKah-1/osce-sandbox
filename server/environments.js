@@ -76,34 +76,60 @@ export class EnvironmentLibrary {
   fs.renameSync(file,tombstone);try{fs.unlinkSync(tombstone)}catch{}
   return {deleted:true,id:record.id,name:record.name};
  }
- attach(session,id){const record=this.read(id);const validated=studioWith(record.snapshot);
+ // Legacy v0.9 blueprints captured the old non-articulated goniometer.
+ // Upgrade that single immutable built-in on explicit load, preserving all
+ // user-authored assets, scene positions, and unrelated behavior definitions.
+ upgradeLegacyTeachingAsset(record){
+  const i=record.snapshot?.assets?.findIndex(a=>a.id==='goniometer'&&!a.custom&&!(a.mechanisms||[]).length)??-1;
+  if(i<0)return record;
+  const current=makeStudio(null).assets.find(a=>a.id==='goniometer');
+  if(!current?.mechanisms?.length)return record;
+  const next=copy(record);
+  next.snapshot.assets[i]=copy(current);
+  for(const entity of next.snapshot.scene.entities.filter(e=>e.assetId==='goniometer')){
+   entity.controls=Object.fromEntries(current.mechanisms.map(m=>[m.id,m.initial]));
+  }
+  next.revision++;next.updatedAt=new Date().toISOString();
+  // A migration is a durable version change; older attached sessions will
+  // reject stale writes rather than overwriting the upgraded blueprint.
+  studioWith(next.snapshot);this.write(next);
+  return next;
+ }
+ attach(session,id){let record=this.read(id);record=this.upgradeLegacyTeachingAsset(record);const validated=studioWith(record.snapshot);
   const studio=session.studio||session;const previous=studio.snapshot();
-  studio.scene=copy(validated.scene);studio.scene.revision=previous.scene.revision+1;studio.assets=copy(validated.assets);studio.behaviors=copy(validated.behaviors);
-  studio.undoStack=[];studio.redoStack=[];studio.log=[];studio.environmentId=id;studio.environmentRevision=record.revision;
+  studio.scene=copy(validated.scene);studio.assets=copy(validated.assets);studio.behaviors=copy(validated.behaviors);
+  studio.undoStack=[];studio.redoStack=[];studio.log=[];studio.operationReceipts=new Map();studio.environmentId=id;studio.environmentRevision=record.revision;
   studio.emit({at:new Date().toISOString(),label:'environment_loaded',revision:studio.scene.revision});
   return {environment:this.meta(record),environmentId:id,sessionId:studio.sessionId,...studio.snapshot()};
  }
  // Runs in one synchronous event-loop turn: dry-run both states, update live, durably
  // persist ONLY the MCP operation applied to the saved baseline, then dispatch UI event.
  // Manual drag deltas remain transient even if ChatGPT edits the same session later.
- mutate(studio,action){
+ mutate(studio,action,{operationId=null,payloadHash=null}={}){
   if(!studio.environmentId)return action(studio);
   const record=this.read(studio.environmentId);
+  if(operationId){
+    if(typeof operationId!=='string'||operationId.length>100||!/^[a-zA-Z0-9_.:-]{8,100}$/.test(operationId))fail('operationId tidak valid','INVALID_OPERATION_ID');
+    const seen=record.receipts?.find(r=>r.id===operationId);
+    if(seen){if(studio.environmentRevision!==record.revision)fail('Environment berubah sejak operasi sebelumnya, muat ulang','ENVIRONMENT_REVISION_CONFLICT',409);if(seen.hash!==payloadHash)fail('operationId digunakan ulang untuk operasi berbeda','IDEMPOTENCY_CONFLICT',409);return {...copy(seen.response),deduplicated:true};}
+  }
   if(studio.environmentRevision!==record.revision)fail('Environment telah berubah di sesi lain. Muat ulang environment untuk melanjutkan.','ENVIRONMENT_REVISION_CONFLICT',409);
   const saved=studioWith(record.snapshot),preflight=studioWith(snapOf(studio));
   action(preflight,'live');action(saved,'baseline'); // any validation failure occurs before live scene changes.
-  const old={scene:copy(studio.scene),assets:copy(studio.assets),behaviors:copy(studio.behaviors),undoStack:copy(studio.undoStack),redoStack:copy(studio.redoStack),log:copy(studio.log)};
+  const old={scene:copy(studio.scene),assets:copy(studio.assets),behaviors:copy(studio.behaviors),undoStack:copy(studio.undoStack),redoStack:copy(studio.redoStack),log:copy(studio.log),receipts:new Map(studio.operationReceipts||[])};
   const originalEmit=studio.emit;const queued=[];studio.emit=event=>queued.push(event);
   try{
    const response=action(studio,'live');
    record.undo=[...(record.undo||[]),copy(record.snapshot)].slice(-12);record.redo=[];
    record.snapshot=snapOf(saved);record.revision++;record.updatedAt=new Date().toISOString();
+   const confirmed={...response,environment:this.meta(record),autoSaved:true};
+   if(operationId)record.receipts=[...(record.receipts||[]),{id:operationId,hash:payloadHash,response:copy(confirmed)}].slice(-24);
    this.write(record);studio.environmentRevision=record.revision;
    studio.emit=originalEmit;for(const event of queued)studio.emit(event);
-   return {...response,environment:this.meta(record),autoSaved:true};
+   return confirmed;
   }catch(e){
    studio.scene=old.scene;studio.assets=old.assets;studio.behaviors=old.behaviors;
-   studio.undoStack=old.undoStack;studio.redoStack=old.redoStack;studio.log=old.log;studio.emit=originalEmit;
+   studio.undoStack=old.undoStack;studio.redoStack=old.redoStack;studio.log=old.log;studio.operationReceipts=old.receipts;studio.emit=originalEmit;
    throw e;
   }
  }

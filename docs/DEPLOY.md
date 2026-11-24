@@ -6,11 +6,11 @@ This repository contains one complete Node.js 22 server that serves (1) tablet-f
 
 Saved environments use separate objects in the existing R2 binding, keyed by the authenticated Site user. Each durable write checks the previous object version. Temporary tablet and widget edits apply only to the active session. If a concurrent session edit blocks the live update after a blueprint was saved, the MCP response returns `sessionNeedsReload: true`. Reopen the saved environment to see the durable result.
 
-Build with `npm run build:sites` and publish using the existing project ID in `.openai/hosting.json`. Sites authenticates the caller for both the editor and MCP. v0.9 uses the existing `STUDIO` R2 binding for short-lived state shared across worker instances. A new editor visit or `open_studio` without an ID starts at revision 0. To share a session, send its ID to MCP under the same account.
+Build with `npm run build:sites` and publish using the existing project ID in `.openai/hosting.json`. Sites authenticates the caller for both the editor and MCP. v1.1 uses the existing `STUDIO` R2 binding for short-lived state shared across worker instances. A new editor visit or `open_studio` without an ID starts at revision 0. To share a session, send its ID to MCP under the same account.
 
-The Site rejects sessions two hours after creation. A successful tab-close request deletes the session immediately. Opening fresh sessions also cleans up expired entries, including entries left by disconnected tabs and ChatGPT widgets. The v0.4 `projects/` records are never accessed by the v0.9 session store.
+The Site rejects sessions two hours after creation. A successful tab-close request deletes the session immediately. Opening fresh sessions also cleans up expired entries, including entries left by disconnected tabs and ChatGPT widgets. The v0.4 `projects/` records are never accessed by the v1.1 session store.
 
-The separate Node deployment uses RAM-only sessions. Its file-backed Studio API remains available for local development and tests, but the v0.9 server does not use it for sessions.
+The separate Node deployment uses RAM-only sessions. Its file-backed Studio API remains available for local development and tests, but the v1.1 server does not use it for sessions.
 
 ## Option A: Render Blueprint — HTTPS & persistent volume
 

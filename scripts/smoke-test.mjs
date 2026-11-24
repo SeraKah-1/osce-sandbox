@@ -13,7 +13,7 @@ const mcp=async(method,params={})=>{
  const v=await api('/mcp','POST',{jsonrpc:'2.0',id:23,method,params});
  if(v.error||v.result?.isError)throw Error(JSON.stringify(v.error||v.result));return v.result;
 };
-const health=await api('/health');if(health.sessionPersistence!==false||health.environmentPersistence!==true||health.version!=='0.9.0')throw Error(`Wrong server at ${base}: expected v0.9 with transient sessions + durable environments; got ${JSON.stringify(health)}.`);
+const health=await api('/health');if(health.sessionPersistence!==false||health.environmentPersistence!==true||health.version!=='1.1.0')throw Error(`Wrong server at ${base}: expected v1.1 with transient sessions + durable environments; got ${JSON.stringify(health)}.`);
 const start=await api('/api/session','POST',{});const id=start.sessionId;let envId=null;
 try{
  const list=(await mcp('tools/list')).tools;

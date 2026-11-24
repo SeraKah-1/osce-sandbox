@@ -1,4 +1,5 @@
 import {SceneError, Studio} from './studio.js';
+import {diffWorld} from './scene-delta.js';
 
 const PREFIX='temporary/v06/';
 const TTL_MS=2*60*60*1000;
@@ -42,7 +43,9 @@ export class SiteSessions {
     return {studio,commit:async()=>{
       const revision=studio.scene.revision;
       if (revision===initial) return;
-      const data=new TextEncoder().encode(JSON.stringify({...studio.storedState(),environmentId:studio.environmentId,environmentRevision:studio.environmentRevision,environmentContentRevision:studio.environmentContentRevision}));
+      const delta=revision===initial+1&&studio.environmentId===(savedState.environmentId??null)&&studio.environmentRevision===(savedState.environmentRevision??null)?diffWorld(savedState,studio.current()):null;
+      const lastDelta=delta&&JSON.stringify(delta).length<250_000?delta:null;
+      const data=new TextEncoder().encode(JSON.stringify({lastDelta,...studio.storedState(),environmentId:studio.environmentId,environmentRevision:studio.environmentRevision,environmentContentRevision:studio.environmentContentRevision}));
       if (data.byteLength>12_000_000) throw new SceneError('Sesi dan riwayat melebihi batas penyimpanan.','SESSION_TOO_LARGE',413);
       const saved=await this.bucket.put(this.key(id),data,{
         onlyIf:{etagMatches:object.etag},customMetadata:{revision:String(revision)},
@@ -55,6 +58,15 @@ export class SiteSessions {
     const object=await this.bucket.head(this.key(id));
     if (!object) throw sessionExpired();
     return Number(object.customMetadata.revision);
+  }
+
+  async event(id,since){
+    const revision=await this.revision(id);
+    if(revision!==since+1)return {revision};
+    const object=await this.bucket.get(this.key(id));
+    if(!object)throw sessionExpired();
+    const state=await object.json();
+    return {revision:state.scene.revision,delta:state.lastDelta?.revision===since+1?state.lastDelta:undefined};
   }
 
   async close(id) {

@@ -23,6 +23,7 @@ export function hitTestPuppet(world,project,skeleton,assetPosition,pointer,detai
  const push=(entityId,kind,p,priority,target=null,rawWorld=null)=>{if(!p?.visible||p.z>=1)return;const d=distance(p,pointer);const radius=kind==='move-character'?36:kind==='pose'?31:kind==='move-asset'?43:32;
    if(d<=radius)candidates.push({entityId,kind,target,d,score:d-priority,world:rawWorld});};
  for(const e of world.scene.entities){
+  if(detailSelection&&e.id!==detailSelection)continue;
   if(e.type==='character'){
    const J=skeleton(e).joints;const P=Object.fromEntries(Object.entries(J).map(([k,p])=>[k,project(p)]));
    // End-effectors have first pick priority: a user can grab hands/feet before selecting the puppet.
@@ -220,7 +221,7 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   if(pointers.size>1){if(g.kind!=='multitouch'){commit(g);gesture=cameraGesture();onGesture?.('camera');return;}
     const pts=[...pointers.values()],dist=Math.max(12,distance(pts[0],pts[1]));
     const center={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
-    camera.distance=clamp(camera.distance*g.distance/dist,2.1,16);
+    camera.distance=clamp(camera.distance*g.distance/dist,getDetailSelection()?0.65:2.1,16);
     const pan=camera.distance*.0017,dx=center.x-g.center.x,dy=center.y-g.center.y;
     const az=camera.azimuth,el=camera.elevation;
     const right=[Math.cos(az),0,-Math.sin(az)],up=[-Math.sin(el)*Math.sin(az),Math.cos(el),-Math.sin(el)*Math.cos(az)];
@@ -253,7 +254,7 @@ export function installDirectTouch({canvas,getWorld,project,skeleton,assetPositi
   else if(g?.moved&&g.kind!=='orbit')originalPosition(g,p,true);
   commit(g);onGesture?.('end',g?.hit);
  };
- const wheel=e=>{e.preventDefault();camera.distance=clamp(camera.distance*(e.deltaY>0?1.075:.93),2.1,16);};
+ const wheel=e=>{e.preventDefault();camera.distance=clamp(camera.distance*(e.deltaY>0?1.075:.93),getDetailSelection()?0.65:2.1,16);};
  const handleBlur=()=>{cancelFrame(gesture);resetProvisional(gesture);pointers.clear();gesture=null;onGesture?.('cancel');};
  if(canvas.style)canvas.style.touchAction='none';
  canvas.addEventListener('pointerdown',begin);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',finish);

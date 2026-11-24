@@ -8,7 +8,7 @@ export function rpc(resolveStudio,body,services={}){
   const {id,method,params={}}=body;
   if(id===undefined)return null; // notification
   try{
-    if(method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'osce-sandbox-studio',version:'0.9.0'},instructions:'Create persistent AI-built environments with create_environment. Their edits through MCP auto-save to a durable named library; use list_environments, get_environment, load_environment and delete_environment. User gestures remain temporary and never auto-save. Require explicit sessionId for all world tool calls other than open_studio; never use a global session fallback. Read current scene and revision before edits. Preview large batches. Articulated tools use validated declarative geometry/behavior, never arbitrary code. This is a sandbox, not a medically validated physiological simulation.'}};
+    if(method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'osce-sandbox-studio',version:'1.1.0'},instructions:'Create persistent AI-built environments with create_environment. Their edits through MCP auto-save to a durable named library; use list_environments, get_environment, load_environment and delete_environment. User gestures remain temporary and never auto-save. Require explicit sessionId for all world tool calls other than open_studio; never use a global session fallback. Read current scene and revision before edits. Preview large batches. Articulated tools use validated declarative geometry/behavior, never arbitrary code. This is a sandbox, not a medically validated physiological simulation.'}};
     if(method==='ping')return {jsonrpc:'2.0',id,result:{}};
     if(method==='tools/list')return {jsonrpc:'2.0',id,result:{tools:toolsList}};
     if(method==='resources/list')return {jsonrpc:'2.0',id,result:{resources:[{uri:WIDGET_URI,name:'OSCE Sandbox Studio',title:'Interactive 3D OSCE Sandbox',mimeType:'text/html;profile=mcp-app'}]}};
@@ -47,8 +47,10 @@ export function rpc(resolveStudio,body,services={}){
         const live=typeof resolveStudio==='function'?resolveStudio(args.sessionId,name==='open_studio'):resolveStudio;
         if(name==='open_studio'&&args.environmentId){value=needLibrary().attach(live,args.environmentId);}
         else if(library&&args.saveToEnvironment!==false&&environmentMutations.has(name)){
-          const normalized=normalizeSceneArgs(args);
-          value=library.mutate(live,(candidate,source)=>call(candidate,name,name==='apply_scene_operations'&&source==='baseline'?{...normalized,baseRevision:candidate.scene.revision}:normalized));
+          const operationId=name==='apply_scene_operations'?args.operationId??null:null;
+          const payloadHash=operationId!==null?crypto.createHash('sha256').update(JSON.stringify([operationId,args.operations])).digest('hex'):null;
+          const normalized=normalizeSceneArgs(args,payloadHash);
+          value=library.mutate(live,(candidate,source)=>call(candidate,name,name==='apply_scene_operations'&&source==='baseline'?{...normalized,baseRevision:candidate.scene.revision,operationId:null}:normalized),{operationId,payloadHash});
         }else value=call(live,name,args);
       }
       return {jsonrpc:'2.0',id,result:{content:[{type:'text',text:JSON.stringify(value)}],structuredContent:typeof value==='object'&&value!==null&&!Array.isArray(value)?value:{result:value},isError:false,_meta:['open_studio','load_environment'].includes(params.name)?{ui:{resourceUri:WIDGET_URI}}:undefined}};

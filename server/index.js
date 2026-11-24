@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -24,7 +25,13 @@ const worlds=new SessionWorlds({onUpdate:(id,event)=>{
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 function json(res,status,value,headers={}){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...headers});res.end(JSON.stringify(value));}
 async function bodyJson(req){const chunks=[];let size=0;for await(const c of req){size+=c.length;if(size>1_500_000)throw new SceneError('Body terlalu besar','TOO_LARGE',413);chunks.push(c)}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}')}catch{throw new SceneError('JSON tidak valid')}}
-function authorized(req){return !API_TOKEN||req.headers.authorization===`Bearer ${API_TOKEN}`;}
+function authorized(req){
+ if(!API_TOKEN)return true;
+ const token=req.headers.authorization;
+ if(typeof token!=='string'||!token.startsWith('Bearer '))return false;
+ const got=Buffer.from(token.slice(7)),expected=Buffer.from(API_TOKEN);
+ return got.length===expected.length&&crypto.timingSafeEqual(got,expected);
+}
 function studioForRequest(req){return worlds.get(req.headers['x-studio-session']);}
 function resolveMcp(id,createForOpen){
   if(!id){if(createForOpen)return worlds.get(worlds.create().sessionId);
@@ -39,7 +46,7 @@ const server=http.createServer(async(req,res)=>{
   if(req.headers.origin&&new URL(req.headers.origin).host!==req.headers.host&&url.pathname!=='/health')throw new SceneError('Cross-origin request forbidden','FORBIDDEN',403);
   if(req.method==='OPTIONS'){res.writeHead(204,{'Allow':'GET,POST,DELETE,PATCH,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,X-Studio-Session,MCP-Protocol-Version,MCP-Session-Id,Accept'});res.end();return;}
   if(req.method==='GET'&&url.pathname==='/widget'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'self'"});res.end(widgetHTML());return;}
-  if(url.pathname==='/health'){json(res,200,{ok:true,server:'osce-playground',version:'0.9.0',sessionPersistence:false,environmentPersistence:true,environmentCount:library.list().length,sessionCount:worlds.sessions.size});return;}
+  if(url.pathname==='/health'){json(res,200,{ok:true,server:'osce-playground',version:'1.1.0',sessionPersistence:false,environmentPersistence:true,environmentCount:library.list().length,sessionCount:worlds.sessions.size});return;}
   if(url.pathname==='/mcp'){
     if(!authorized(req)){json(res,401,{error:'Bearer token required'});return;}
     if(req.method!=='POST'){json(res,405,{error:'POST only'});return;}
@@ -70,7 +77,7 @@ const server=http.createServer(async(req,res)=>{
       const ping=setInterval(()=>{try{worlds.get(studio.sessionId);res.write(': ping\n\n')}catch{}},20_000);
       req.on('close',()=>{clearInterval(ping);set.delete(res);if(!set.size)clients.delete(studio.sessionId)});return;
     }
-    if(req.method==='POST'&&url.pathname==='/api/operations'){const p=await bodyJson(req);json(res,200,studio.apply(p.operations,p.baseRevision));return;}
+    if(req.method==='POST'&&url.pathname==='/api/operations'){const p=await bodyJson(req);json(res,200,studio.apply(p.operations,p.baseRevision,p.operationId||null));return;}
     if(req.method==='POST'&&url.pathname==='/api/preview'){const p=await bodyJson(req);json(res,200,studio.preview(p.operations,p.baseRevision));return;}
     if(req.method==='POST'&&url.pathname==='/api/assets'){json(res,201,studio.createAsset(await bodyJson(req)));return;}
     if(req.method==='PATCH'&&url.pathname.startsWith('/api/assets/')){json(res,200,studio.updateAsset(url.pathname.slice(12),await bodyJson(req)));return;}
@@ -94,5 +101,5 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='HEAD')res.end();else fs.createReadStream(file).pipe(res);
  }catch(e){json(res,e.status||400,{error:e.message,code:e.code||'INTERNAL_ERROR'});}
 });
-server.listen(PORT,HOST,()=>console.log(`OSCE Playground v0.9 at http://${HOST}:${PORT} · transient sessions + durable MCP environments · MCP /mcp`));
+server.listen(PORT,HOST,()=>console.log(`OSCE Playground v1.1 at http://${HOST}:${PORT} · transient sessions + durable MCP environments · MCP /mcp`));
 process.on('SIGTERM',()=>server.close());

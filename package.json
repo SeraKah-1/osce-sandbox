@@ -1,14 +1,14 @@
 {
   "name": "osce-sandbox-studio",
   "private": true,
-  "version": "0.9.0",
+  "version": "1.1.0",
   "type": "module",
-  "description": "Deployable tablet-first 3D OSCE studio with transient in-memory sessions, durable MCP environment library, local-first touch posing and MCP App UI",
+  "description": "Tablet-first OSCE puppet playground with immediate local gestures, optimistic props, real articulated tool practice, temporary sessions and persistent MCP environments",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check server/index.js && node --check server/sessions.js && node --check server/environments.js && node --check server/core.js && node --check web/app.js && node --check web/render3d.js && node --check web/touch-pose.js && node --check web/ik3d.js && node --check web/placement.js && node --check web/assembly.js && node --check server/mcp.js && node --check server/widget.js && node --check server/stdio.js",
+    "check": "node --check server/index.js && node --check server/sessions.js && node --check server/environments.js && node --check server/core.js && node --check web/app.js && node --check web/render3d.js && node --check web/touch-pose.js && node --check web/ik3d.js && node --check web/placement.js && node --check web/assembly.js && node --check server/mcp.js && node --check server/widget.js && node --check server/stdio.js && node --check web/optimistic.js && node --check web/learning.js && node --check web/spatial.js && node --check web/scene-delta.js && node --check web/coupling.js",
     "smoke": "node scripts/smoke-test.mjs",
     "build:sites": "node scripts/build-sites.mjs"
   },

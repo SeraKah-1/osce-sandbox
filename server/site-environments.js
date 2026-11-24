@@ -133,15 +133,29 @@ export class SiteEnvironments {
       return value;
     }
     const {record,etag}=saved;
+    const operationId=name==='apply_scene_operations'?args.operationId??null:null;
+    let digest=null;
+    if(operationId!==null){
+      if(typeof operationId!=='string'||!/^[a-zA-Z0-9_.:-]{8,100}$/.test(operationId))fail('operationId tidak valid','INVALID_OPERATION_ID');
+      const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([operationId,args.operations]))));
+      digest=Array.from(hash,byte=>byte.toString(16).padStart(2,'0')).join('');
+      const previous=record.receipts?.find(entry=>entry.id===operationId);
+      if(previous){
+        if(previous.digest!==digest)fail('operationId dipakai untuk perintah berbeda','IDEMPOTENCY_CONFLICT',409);
+        return {...previous.value,deduplicated:true,environment:metadata(record),autoSaved:true,
+          ...(previous.sessionId!==live.sessionId||live.environmentContentRevision!==record.contentRevision?{sessionNeedsReload:true}:{})};
+      }
+    }
     if(live.environmentContentRevision!==record.contentRevision)conflict();
-    const normalized=normalizeSceneArgs(args);
+    const normalized=normalizeSceneArgs(args,digest);
     const baseline=new Studio(record.snapshot);
-    const baselineArgs=name==='apply_scene_operations'?{...normalized,baseRevision:baseline.scene.revision}:normalized;
+    const baselineArgs=name==='apply_scene_operations'?{...normalized,baseRevision:baseline.scene.revision,operationId:null}:normalized;
     callSceneTool(baseline,name,baselineArgs);
     const value=callSceneTool(live,name,normalized);
     record.undo=[...record.undo,record.snapshot].slice(-12);
     record.redo=[];
     record.snapshot=baseline.current();
+    if(operationId!==null)record.receipts=[...(record.receipts||[]),{id:operationId,digest,sessionId:live.sessionId,value}].slice(-24);
     record.revision++;
     record.contentRevision++;
     record.updatedAt=updateTime();

@@ -1,0 +1,24 @@
+{
+  "id": "training-linked-probe",
+  "name": "Probe mekanik latihan",
+  "category": "Alat latihan",
+  "description": "Alat generik untuk menguji mekanisme dan kondisi kontak, bukan perangkat medis tervalidasi.",
+  "parts": [
+    {"id":"housing","shape":"box","position":[0,0,0],"size":[0.3,0.12,0.2],"color":"#aacac2"},
+    {"id":"arm","shape":"box","position":[0.14,0,0],"size":[0.25,0.04,0.045],"color":"#deb693"},
+    {"id":"gauge","shape":"box","position":[0,0.1,0],"size":[0.05,0.015,0.1],"color":"#6f95c5"}
+  ],
+  "anchors": [{"id":"arm-tip","partId":"arm","position":[0.125,0,0]}],
+  "mechanisms": [
+    {"id":"arm-angle","label":"Lengan alat","kind":"hinge","partIds":["arm"],"pivot":[0,0,0],"axis":[0,1,0],"min":0,"max":180,"initial":0,"drives":[{"mechanismId":"gauge-angle","ratio":0.5,"offset":0}]},
+    {"id":"gauge-angle","label":"Indikator sudut","kind":"dial","partIds":["gauge"],"pivot":[0,0,0],"axis":[0,1,0],"min":0,"max":90,"initial":0}
+  ],
+  "learning": {
+    "title":"Latihan alat berengsel",
+    "note":"Membaca mekanisme 3D, bukan tekanan ataupun fisiologi.",
+    "steps":[
+      {"id":"rotate-40","instruction":"Putar lengan utama ke sudut 40 derajat.","condition":{"kind":"mechanism_range","mechanismId":"arm-angle","min":38,"max":42}},
+      {"id":"hold-40","instruction":"Pertahankan posisi 40 derajat selama setengah detik.","condition":{"kind":"hold","durationMs":500,"predicate":{"kind":"mechanism_range","mechanismId":"arm-angle","min":38,"max":42}}}
+    ]
+  }
+}
